@@ -131,7 +131,7 @@ class SMTCListener(QThread):
                 if now - last_tick >= tick_interval:
                     last_tick = now
                     elapsed = self._get_elapsed_ms()
-                    self.tick.emit(max(0, elapsed))
+                    self.tick.emit(elapsed)
 
                 await asyncio.sleep(0.05)
 
@@ -399,12 +399,13 @@ class SMTCListener(QThread):
                 if song_just_changed:
                     self._elapsed_when_paused = 0
                     self._play_start_wall = now_mono
-                    self.tick.emit(max(0, self._get_elapsed_ms_locked()))
+                    self.tick.emit(self._get_elapsed_ms_locked())
                 return
 
             # 原生时间轴模式：结合 last_updated_time 外推当前进度
             native_current_s = pos_s
-            if is_playing and last_updated:
+            # 切歌且处于初始阶段时不累加可能属于上一首歌的历史 age_s
+            if is_playing and last_updated and not (song_just_changed and pos_s < 1.0):
                 age_s = self._get_age_seconds(last_updated)
                 if 0.0 <= age_s <= 30.0:
                     native_current_s += age_s
@@ -423,7 +424,7 @@ class SMTCListener(QThread):
                     self._play_start_wall = now_mono - native_current_s
                 else:
                     self._elapsed_when_paused = native_pos_ms
-                self.tick.emit(max(0, self._get_elapsed_ms_locked()))
+                self.tick.emit(self._get_elapsed_ms_locked())
 
     # ── 内部辅助计算 ─────────────────────────────────────────────────────────
     def _get_raw_elapsed_ms_locked(self) -> int:

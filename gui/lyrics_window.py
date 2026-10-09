@@ -142,8 +142,9 @@ class LyricsWindow(QObject):
         is_playing = self.smtc._is_playing
         self._overlay.set_playing(is_playing)
         self._fullscreen.set_playing(is_playing)
-        self._overlay.set_current_time(0, -1)
-        self._fullscreen.set_current_time(0, -1)
+        init_ms = self.smtc._get_elapsed_ms()
+        self._overlay.set_current_time(init_ms, -1)
+        self._fullscreen.set_current_time(init_ms, -1)
 
         # 优先从本地数据库读取缓存
         cached = db_cache.get_song_cache(title, artist)
@@ -267,7 +268,11 @@ class LyricsWindow(QObject):
     def _push_lyrics_to_ui(self) -> None:
         self._overlay.set_lyrics(self._lyrics)
         self._fullscreen.set_lyrics(self._lyrics)
-        self._cur_index = -1
+        current_ms = self.smtc._get_elapsed_ms()
+        idx = self._lyrics.get_line_index(current_ms) if self._lyrics else -1
+        self._cur_index = idx
+        self._overlay.set_current_time(current_ms, idx)
+        self._fullscreen.set_current_time(current_ms, idx)
 
     # ── 设置对话框 ───────────────────────────────────────────────────────────
     def preview_offset(self, offset_ms: int) -> None:
@@ -275,7 +280,7 @@ class LyricsWindow(QObject):
         self.smtc.set_offset(offset_ms)
         if not self._lyrics:
             return
-        current_ms = max(0, self.smtc._get_elapsed_ms())
+        current_ms = self.smtc._get_elapsed_ms()
         idx = self._lyrics.get_line_index(current_ms)
         self._cur_index = idx
         self._overlay.set_current_time(current_ms, idx)
@@ -324,12 +329,6 @@ class LyricsWindow(QObject):
                 self._fullscreen.update_hd_cover(hd_cover)
             self._overlay.set_status_text("")
             self._push_lyrics_to_ui()
-            current_ms = max(0, self.smtc._get_elapsed_ms())
-            if self._lyrics:
-                idx = self._lyrics.get_line_index(current_ms)
-                self._cur_index = idx
-                self._overlay.set_current_time(current_ms, idx)
-                self._fullscreen.set_current_time(current_ms, idx)
             self._overlay.update()
             self._fullscreen.update()
 

@@ -190,8 +190,6 @@ class OverlayWidget(QWidget):
             lyrics and any(bool(line.words) for line in lyrics.lines)
         )
         self._cur_index = -1
-        self._base_ms = 0.0
-        self._base_wall_time = time.monotonic()
         self._anim_progress = 1.0
         self._prev_main_text = ""
         self._prev_trans_text = ""
@@ -215,7 +213,10 @@ class OverlayWidget(QWidget):
                 self._prev_trans_text = ""
 
             self._cur_index = idx
-            self._anim_progress = 0.0
+            if idx >= 0:
+                self._anim_progress = 0.0
+            else:
+                self._anim_progress = 1.0
             # 换句时重置水平滚动
             self._scroll_x = 0.0
             self._target_scroll_x = 0.0

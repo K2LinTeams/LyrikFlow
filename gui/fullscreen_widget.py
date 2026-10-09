@@ -113,10 +113,8 @@ class LyricsCanvas(QWidget):
             lyrics and any(bool(line.words) for line in lyrics.lines)
         )
         self._cur_index = -1
-        self._base_ms = 0.0
-        self._base_wall_time = time.monotonic()
-        self._scroll_offset = 0.0
-        self._target_offset = 0.0
+        self._target_offset = self._calc_offset_for(0)
+        self._scroll_offset = self._target_offset
         self.update()
 
     def set_current_time(self, elapsed_ms: int, idx: int):
@@ -170,13 +168,14 @@ class LyricsCanvas(QWidget):
 
     def _calc_offset_for(self, idx: int) -> float:
         """计算让第 idx 行在全屏视口中自然居中的偏移量"""
-        if not self._lyrics or idx < 0:
+        if not self._lyrics or not self._lyrics.lines:
             return 0.0
+        target_idx = max(0, min(len(self._lyrics.lines) - 1, idx if idx >= 0 else 0))
         y = 0.0
         for i, line in enumerate(self._lyrics.lines):
-            fnt, has_t = self._line_meta(i, idx)
-            lh = self._line_height(i, idx, has_t)
-            if i == idx:
+            fnt, has_t = self._line_meta(i, target_idx)
+            lh = self._line_height(i, target_idx, has_t)
+            if i == target_idx:
                 fm = QFontMetrics(fnt)
                 text_h = float(fm.height())
                 tfnt = self._font_trans_cur
