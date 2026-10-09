@@ -27,6 +27,7 @@ var/
 wheels/
 share/python-wheels/
 data/fonts
+Web/
 *.egg-info/
 .installed.cfg
 *.egg

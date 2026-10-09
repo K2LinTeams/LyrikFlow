@@ -50,94 +50,32 @@ class FetchThread(QThread):
             return
         self.progress_changed.emit(0.10)
 
-        # 优先读取已存在的缓存
+        # 优先读取已存在的结构化缓存
         cached = db_cache.get_song_cache(self._title, self._artist)
-        if cached and (cached.get("yrc") or cached.get("lrc")):
+        if cached and cached.get("parsed"):
             if self._is_cancelled:
                 return
             self.progress_changed.emit(1.0)
             hd_cover = cached.get("hd_cover")
             sub_name = cached.get("sub_name", "")
-            parsed = lyrics_parser.parse_bundle(cached)
-            self.done.emit(parsed, self._title, self._artist, hd_cover, sub_name)
+            self.done.emit(cached["parsed"], self._title, self._artist, hd_cover, sub_name)
             return
 
-        # 检索网易云音乐
-        song_id = lyrics_fetcher.netease_search(self._title, self._artist)
+        # 多源解析管线 (网易云 -> QQ音乐 -> LRCLIB)
+        parsed, hd_cover, sub_name = lyrics_fetcher.fetch_lyrics_multi(
+            title=self._title,
+            artist=self._artist,
+            on_progress=lambda p: self.progress_changed.emit(p),
+            on_cover=lambda t, a, c: self.cover_ready.emit(t, a, c),
+            on_sub_name=lambda t, a, s: self.sub_name_ready.emit(t, a, s),
+            is_cancelled=lambda: self._is_cancelled,
+        )
+
         if self._is_cancelled:
             return
 
-        if song_id:
-            self.progress_changed.emit(0.25)
-
-            # 任务点 1: 获取副歌名与原画封面 URL
-            sub_name, pic_url = lyrics_fetcher.fetch_netease_detail_info(song_id)
-            if self._is_cancelled:
-                return
-            if sub_name:
-                self.sub_name_ready.emit(self._title, self._artist, sub_name)
-            self.progress_changed.emit(0.40)
-
-            # 任务点 2: 下载原画 300x300 专辑封面
-            hd_cover = lyrics_fetcher.download_hd_cover(pic_url) if pic_url else None
-            if self._is_cancelled:
-                return
-            if hd_cover:
-                self.cover_ready.emit(self._title, self._artist, hd_cover)
-            self.progress_changed.emit(1.0)  # 封面加载完成后将进度条补充至满
-
-            # 任务点 3: 获取歌词文本 (yrc, lrc, tlyric)
-            yrc, lrc, tlyric = lyrics_fetcher.fetch_netease_lyrics_text(song_id)
-            if self._is_cancelled:
-                return
-
-            bundle = {
-                "yrc": yrc,
-                "lrc": lrc,
-                "tlyric": tlyric,
-                "hd_cover": hd_cover,
-                "song_id": str(song_id),
-                "sub_name": sub_name,
-            }
-            if yrc or lrc:
-                db_cache.save_song_cache(
-                    title=self._title,
-                    artist=self._artist,
-                    yrc=yrc,
-                    lrc=lrc,
-                    tlyric=tlyric,
-                    hd_cover=hd_cover,
-                    song_id=str(song_id),
-                    sub_name=sub_name,
-                )
-
-            self.progress_changed.emit(1.0)
-            parsed = lyrics_parser.parse_bundle(bundle) if (yrc or lrc) else None
-            self.done.emit(parsed, self._title, self._artist, hd_cover, sub_name)
-            return
-
-        # 回退 LRCLIB
-        self.progress_changed.emit(0.40)
-        bundle = lyrics_fetcher.fetch_lrclib(self._title, self._artist)
-        if self._is_cancelled:
-            return
-        if bundle:
-            db_cache.save_song_cache(
-                title=self._title,
-                artist=self._artist,
-                yrc="",
-                lrc=bundle.get("lrc", ""),
-                tlyric="",
-                hd_cover=None,
-                song_id="",
-                sub_name="",
-            )
-            parsed = lyrics_parser.parse_bundle(bundle)
-            self.progress_changed.emit(1.0)
-            self.done.emit(parsed, self._title, self._artist, None, "")
-        else:
-            self.progress_changed.emit(1.0)
-            self.done.emit(None, self._title, self._artist, None, "")
+        self.progress_changed.emit(1.0)
+        self.done.emit(parsed, self._title, self._artist, hd_cover, sub_name)
 
 
 # ── 主控制器 ──────────────────────────────────────────────────────────────────
@@ -154,7 +92,6 @@ class LyricsWindow(QObject):
         self._fetch_thread: Optional[FetchThread] = None
 
         # ── 创建 UI ──────────────────────────────────────────────────────
-        # 将 self (controller) 注入给 widget，替代 window() 猴子补丁
         self._overlay    = OverlayWidget(controller=self)
         self._fullscreen = FullscreenWidget(controller=self)
 
@@ -197,13 +134,22 @@ class LyricsWindow(QObject):
         self._current_artist = artist
         self._cur_index      = -1
 
-        # 切歌默认同步为正在播放状态
-        self._overlay.set_playing(True)
-        self._fullscreen.set_playing(True)
+        # 初始化并应用此歌曲的有效偏移量
+        effective_offset = settings.get_effective_song_offset(title, artist)
+        self.smtc.set_offset(effective_offset)
 
-        # 1. 优先尝试从本地 SQLite 数据库秒级载入缓存（0 毫秒零感知延迟）
+        # 同步播放状态并重置进度
+        is_playing = self.smtc._is_playing
+        self._overlay.set_playing(is_playing)
+        self._fullscreen.set_playing(is_playing)
+        self._overlay.set_current_time(0, -1)
+        self._fullscreen.set_current_time(0, -1)
+
+        # 优先从本地数据库读取缓存
         cached = db_cache.get_song_cache(title, artist)
-        if cached and (cached.get("yrc") or cached.get("lrc")):
+        if cached and cached.get("parsed"):
+            if settings.get_song_offset(title, artist) is None and cached["parsed"].offset_ms != 0:
+                self.smtc.set_offset(cached["parsed"].offset_ms)
             hd_cover = cached.get("hd_cover")
             sub_name = cached.get("sub_name", "")
             display_title = title
@@ -216,20 +162,21 @@ class LyricsWindow(QObject):
             self._fullscreen.set_target_loading_progress(1.0)
             self._overlay.set_song(display_title, display_artist, self._thumb_bytes)
             self._fullscreen.set_song(display_title, display_artist, self._thumb_bytes)
-            self._lyrics = lyrics_parser.parse_bundle(cached)
+            self._lyrics = cached["parsed"]
             self._overlay.set_status_text("")
             self._push_lyrics_to_ui()
             self._tray.setToolTip(f"LyrikFlow — {display_title}\n{display_artist}")
             return
 
-        # 2. 未命中缓存：重置加载进度状态并清空旧封面，避免残留上一首歌曲信息
-        self._thumb_bytes = b""
+        # 无缓存：优先展示 SMTC 原生封面，重置歌词并异步拉取高清内容与歌词
+        self._thumb_bytes = bytes(thumb_bytes) if thumb_bytes else b""
         self._lyrics = None
-        self._overlay.reset_loading_progress()
-        self._fullscreen.reset_loading_progress()
-        self._overlay.set_song(title, artist, b"")
+        has_initial_cover = bool(self._thumb_bytes and len(self._thumb_bytes) > 100)
+        self._overlay.reset_loading_progress(keep_cover=has_initial_cover)
+        self._fullscreen.reset_loading_progress(keep_cover=has_initial_cover)
+        self._overlay.set_song(title, artist, self._thumb_bytes)
         self._overlay.set_lyrics(None)
-        self._fullscreen.set_song(title, artist, b"")
+        self._fullscreen.set_song(title, artist, self._thumb_bytes)
         self._fullscreen.set_lyrics(None)
 
         # 后台异步获取歌词与高清封面并自动入库
@@ -302,13 +249,15 @@ class LyricsWindow(QObject):
         self._fullscreen.update_song_info(display_title, display_artist)
         self._tray.setToolTip(f"LyrikFlow — {display_title}\n{display_artist}")
 
-        if hd_cover and not self._thumb_bytes:
+        if hd_cover and hd_cover != self._thumb_bytes:
             self._thumb_bytes = bytes(hd_cover)
             self._overlay.update_hd_cover(hd_cover)
             self._fullscreen.update_hd_cover(hd_cover)
 
         if lyrics:
             self._overlay.set_status_text("")
+            if settings.get_song_offset(title, artist) is None and lyrics.offset_ms != 0:
+                self.smtc.set_offset(lyrics.offset_ms)
         else:
             self._overlay.set_status_text(
                 f"♪  {display_title}  —  {display_artist}  （暂无歌词）"
@@ -321,26 +270,55 @@ class LyricsWindow(QObject):
         self._cur_index = -1
 
     # ── 设置对话框 ───────────────────────────────────────────────────────────
+    def preview_offset(self, offset_ms: int) -> None:
+        """设置对话框实时微调预览偏移量"""
+        self.smtc.set_offset(offset_ms)
+        if not self._lyrics:
+            return
+        current_ms = max(0, self.smtc._get_elapsed_ms())
+        idx = self._lyrics.get_line_index(current_ms)
+        self._cur_index = idx
+        self._overlay.set_current_time(current_ms, idx)
+        self._fullscreen.set_current_time(current_ms, idx)
+
     def open_settings(self) -> None:
         initial_opacity = settings.get_opacity()
-        dlg = SettingsDialog(overlay_widget=self._overlay)
+        cover_bytes = self._thumb_bytes
+        if not cover_bytes and self._current_title:
+            cached = db_cache.get_song_cache(self._current_title, self._current_artist)
+            if cached and cached.get("hd_cover"):
+                cover_bytes = cached["hd_cover"]
+
+        dlg = SettingsDialog(
+            controller=self,
+            overlay_widget=self._overlay,
+            current_title=self._current_title,
+            current_artist=self._current_artist,
+            thumb_bytes=cover_bytes,
+        )
         if dlg.exec():
             self.smtc.WATCHED_APPS = settings.get_watched_apps()
+            effective_offset = settings.get_effective_song_offset(self._current_title, self._current_artist)
+            self.smtc.set_offset(effective_offset)
             self._overlay.reload_settings()
             self._fullscreen.reload_settings()
             self._reload_current_song_lyrics()
         else:
             self._overlay.set_live_opacity(initial_opacity)
+            initial_offset = settings.get_effective_song_offset(self._current_title, self._current_artist)
+            self.preview_offset(initial_offset)
 
     def _reload_current_song_lyrics(self) -> None:
         """设置更新后重新解析当前歌曲歌词并即时推送到界面"""
         if not self._current_title:
             return
+        effective_offset = settings.get_effective_song_offset(self._current_title, self._current_artist)
+        self.smtc.set_offset(effective_offset)
         cached = db_cache.get_song_cache(self._current_title, self._current_artist)
-        if cached and (cached.get("yrc") or cached.get("lrc")):
-            self._lyrics = lyrics_parser.parse_bundle(cached)
+        if cached and cached.get("parsed"):
+            self._lyrics = cached["parsed"]
             self._push_lyrics_to_ui()
-            current_ms = int(self._overlay._get_live_elapsed_ms())
+            current_ms = max(0, self.smtc._get_elapsed_ms())
             if self._lyrics:
                 idx = self._lyrics.get_line_index(current_ms)
                 self._cur_index = idx
@@ -349,7 +327,7 @@ class LyricsWindow(QObject):
 
     # ── 系统托盘 ─────────────────────────────────────────────────────────────
     def _setup_tray(self) -> QSystemTrayIcon:
-        # 绘制现代渐变应用图标 (64x64)
+        # 绘制托盘图标 (64x64)
         icon_px = QPixmap(64, 64)
         icon_px.fill(QColor(0, 0, 0, 0))
         p = QPainter(icon_px)

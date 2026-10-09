@@ -1,11 +1,5 @@
 """
 fullscreen_widget.py — 全屏歌词视图组件
-特性：
-  - 矢量环境光晕背景渲染
-  - 歌词列表居中平滑垂直流动
-  - 支持逐字歌词 (YRC) 进度渲染与标准歌词 (LRC) 高亮
-  - 界面左上角展示专辑封面与歌曲信息
-  - 底部展示快捷键提示
 """
 from __future__ import annotations
 
@@ -62,6 +56,8 @@ class LyricsCanvas(QWidget):
         self._scroll_offset: float = 0.0      # 当前绘制偏移（像素）
         self._target_offset: float = 0.0
         self._show_translation = settings.get_show_translation()
+        self._show_romaji = settings.get_show_romaji()
+        self._parse_sections = settings.get_parse_sections()
         self._context_lines = settings.get_fullscreen_context_lines()
 
         cur_sz = settings.get_font_size_current()
@@ -82,6 +78,8 @@ class LyricsCanvas(QWidget):
 
     def reload_settings(self):
         self._show_translation = settings.get_show_translation()
+        self._show_romaji = settings.get_show_romaji()
+        self._parse_sections = settings.get_parse_sections()
         self._context_lines = settings.get_fullscreen_context_lines()
         cur_sz = settings.get_font_size_current()
         ctx_sz = settings.get_font_size_context()
@@ -144,12 +142,24 @@ class LyricsCanvas(QWidget):
         self.update()
 
     def set_playing(self, playing: bool):
+        if self._is_playing and not playing:
+            self._base_ms = self._get_live_elapsed_ms()
         self._is_playing = playing
         self._base_wall_time = time.monotonic()
         self.update()
 
     def set_show_translation(self, v: bool):
         self._show_translation = v
+        self._target_offset = self._calc_offset_for(self._cur_index)
+        self.update()
+
+    def set_show_romaji(self, v: bool):
+        self._show_romaji = v
+        self._target_offset = self._calc_offset_for(self._cur_index)
+        self.update()
+
+    def set_parse_sections(self, v: bool):
+        self._parse_sections = v
         self._target_offset = self._calc_offset_for(self._cur_index)
         self.update()
 
@@ -168,10 +178,18 @@ class LyricsCanvas(QWidget):
             lh = self._line_height(i, idx, has_t)
             if i == idx:
                 fm = QFontMetrics(fnt)
-                text_h = fm.height()
-                if has_t:
-                    tfnt = self._font_trans_cur
-                    text_h += QFontMetrics(tfnt).height() + 8
+                text_h = float(fm.height())
+                tfnt = self._font_trans_cur
+                tfm = QFontMetrics(tfnt)
+                sub_h = float(tfm.height() + 6)
+                if self._show_romaji and line.romaji.strip():
+                    text_h += sub_h
+                if self._show_translation and line.translation.strip():
+                    text_h += sub_h
+                if not (self._show_romaji and line.romaji.strip()) and not (self._show_translation and line.translation.strip()) and self._parse_sections:
+                    sec = line.get_secondary_text(False, False, parse_sections=True)
+                    if sec:
+                        text_h += sub_h
                 line_mid = y + text_h / 2.0
                 viewport_h = float(self.height()) if self.height() > 50 else 800.0
                 target_center_y = viewport_h * 0.48
@@ -187,19 +205,34 @@ class LyricsCanvas(QWidget):
             fnt = self._font_near
         else:
             fnt = self._font_far
-        has_t = (
-            self._show_translation
-            and bool(self._lyrics.lines[i].translation)
-        )
+        line = self._lyrics.lines[i]
+        has_ro = bool(self._show_romaji and line.romaji.strip())
+        has_tr = bool(self._show_translation and line.translation.strip())
+        has_sec = bool(self._parse_sections and (line.section or line.role))
+        has_t = has_ro or has_tr or has_sec
         return fnt, has_t
 
     def _line_height(self, i: int, cur: int, has_t: bool) -> float:
         fnt, _ = self._line_meta(i, cur)
         fm = QFontMetrics(fnt)
-        base = fm.height()
-        if has_t:
-            tfnt = self._font_trans_cur if i == cur else self._font_trans_ctx
-            base += QFontMetrics(tfnt).height() + 8
+        base = float(fm.height())
+        line = self._lyrics.lines[i]
+        tfnt = self._font_trans_cur if i == cur else self._font_trans_ctx
+        tfm = QFontMetrics(tfnt)
+        sub_h = float(tfm.height() + 6)
+
+        has_ro = bool(self._show_romaji and line.romaji.strip())
+        has_tr = bool(self._show_translation and line.translation.strip())
+
+        if has_ro:
+            base += sub_h
+        if has_tr:
+            base += sub_h
+        if not (has_ro or has_tr) and self._parse_sections:
+            sec_text = line.get_secondary_text(False, False, parse_sections=True)
+            if sec_text:
+                base += sub_h
+
         return base + 24   # 行间距
 
     def paintEvent(self, event):
@@ -266,9 +299,7 @@ class LyricsCanvas(QWidget):
             main_text = line.text.strip()
 
             if dist == 0:
-                # ── 当前播放行 ──
                 if self._is_verbatim_song:
-                    # ── 模式 A：逐字流光平滑扫掠 ──
                     if line.words:
                         total_w = sum(fm.horizontalAdvance(wd.text) for wd in line.words)
                         curr_x = (w - total_w) / 2.0
@@ -307,47 +338,70 @@ class LyricsCanvas(QWidget):
                         painter.setPen(QPen(QBrush(wipe), 0))
                         painter.drawText(int(curr_x), int(y + fm.ascent()), main_text)
                 else:
-                    # ── 模式 B：非逐字歌曲，纯粹优雅纯白高亮（移除无逐字进度条）──
                     elided = fm.elidedText(main_text, Qt.TextElideMode.ElideRight, w - 80)
                     tx = (w - fm.horizontalAdvance(elided)) // 2
                     painter.setPen(QColor(255, 255, 255, final_alpha))
                     painter.drawText(tx, int(y + fm.ascent()), elided)
 
-                    # 柔和微发光
                     bloom_alpha = int(32 * fade_factor)
                     if bloom_alpha > 0:
                         painter.setPen(QColor(255, 255, 255, bloom_alpha))
                         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
                             painter.drawText(tx + dx, int(y + fm.ascent()) + dy, elided)
             else:
-                # ── 非当前上下文行 ──
                 elided = fm.elidedText(main_text, Qt.TextElideMode.ElideRight, w - 80)
                 tx = (w - fm.horizontalAdvance(elided)) // 2
                 painter.setPen(QColor(255, 255, 255, final_alpha))
                 painter.drawText(tx, int(y + fm.ascent()), elided)
 
-            # ── 译文绘制 ──
-            if has_t and line.translation:
-                ty = y + fm.height() + 8
-                tfnt = self._font_trans_cur if dist == 0 else self._font_trans_ctx
-                painter.setFont(tfnt)
-                tfm = QFontMetrics(tfnt)
-                te = tfm.elidedText(line.translation, Qt.TextElideMode.ElideRight, w - 80)
-                ttx = (w - tfm.horizontalAdvance(te)) // 2
+            # ── 副行绘制（三行布局：主歌词 + 罗马音 + 译文）──
+            has_ro = bool(self._show_romaji and line.romaji.strip())
+            has_tr = bool(self._show_translation and line.translation.strip())
+            tfnt = self._font_trans_cur if dist == 0 else self._font_trans_ctx
+            painter.setFont(tfnt)
+            tfm = QFontMetrics(tfnt)
+            sub_y = y + fm.height() + 8
 
+            if has_ro:
+                ro_text = line.romaji.strip()
+                te = tfm.elidedText(ro_text, Qt.TextElideMode.ElideRight, w - 80)
+                ttx = (w - tfm.horizontalAdvance(te)) // 2
+                base_ro_alpha = 200 if dist == 0 else 85
+                ro_alpha = int(base_ro_alpha * (base_alpha / 255.0) * fade_factor)
+                if ro_alpha > 2:
+                    painter.setPen(QColor(160, 216, 239, ro_alpha))
+                    painter.drawText(ttx, int(sub_y + tfm.ascent()), te)
+                sub_y += tfm.height() + 6
+
+            if has_tr:
+                # 绘制中文译文（第二副行，柔和副白）
+                tr_text = line.translation.strip()
+                te = tfm.elidedText(tr_text, Qt.TextElideMode.ElideRight, w - 80)
+                ttx = (w - tfm.horizontalAdvance(te)) // 2
                 base_t_alpha = 215 if dist == 0 else 95
                 t_alpha = int(base_t_alpha * (base_alpha / 255.0) * fade_factor)
                 if t_alpha > 2:
-                    tcol = QColor(195, 225, 255, t_alpha)
-                    painter.setPen(tcol)
-                    painter.drawText(ttx, int(ty + tfm.ascent()), te)
+                    painter.setPen(QColor(195, 225, 255, t_alpha))
+                    painter.drawText(ttx, int(sub_y + tfm.ascent()), te)
+                sub_y += tfm.height() + 6
+
+            if not (has_ro or has_tr) and self._parse_sections:
+                sec_text = line.get_secondary_text(False, False, parse_sections=True)
+                if sec_text:
+                    te = tfm.elidedText(sec_text, Qt.TextElideMode.ElideRight, w - 80)
+                    ttx = (w - tfm.horizontalAdvance(te)) // 2
+                    base_sec_alpha = 200 if dist == 0 else 90
+                    sec_alpha = int(base_sec_alpha * (base_alpha / 255.0) * fade_factor)
+                    if sec_alpha > 2:
+                        painter.setPen(QColor(195, 225, 255, sec_alpha))
+                        painter.drawText(ttx, int(sub_y + tfm.ascent()), te)
 
             y += lh
 
 
 # ── 全画幅主窗口 ──────────────────────────────────────────────────────────────
 class FullscreenWidget(QWidget):
-    """全画幅沉浸式歌词视图（支持平滑矢量环境光晕背景）"""
+    """全屏歌词视图"""
 
     def __init__(self, controller, parent=None):
         super().__init__(parent)
@@ -371,6 +425,11 @@ class FullscreenWidget(QWidget):
         self._prev_bg_pixmap: Optional[QPixmap] = None
         self._bg_crossfade: float = 1.0
 
+        # 封面图缩略图与平滑 Crossfade 替换
+        self._thumb_pixmap: Optional[QPixmap] = None
+        self._prev_thumb_pixmap: Optional[QPixmap] = None
+        self._thumb_crossfade: float = 1.0
+
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -380,7 +439,7 @@ class FullscreenWidget(QWidget):
         # 歌词画布
         self._canvas = LyricsCanvas(self)
 
-        # 封面加载圆环进度系统 (0.0 ~ 1.0，任务点平滑推进)
+        # 封面加载动画状态 (0.0 ~ 1.0)
         self._loading_progress: float = 1.0
         self._target_loading_progress: float = 1.0
         self._loading_spinner_angle: float = 0.0
@@ -427,8 +486,6 @@ class FullscreenWidget(QWidget):
             scene = QGraphicsScene()
             item = QGraphicsPixmapItem(cropped)
             blur = QGraphicsBlurEffect()
-            # 在 100px 高度的底图上应用 32.0 模糊半径
-            # 全屏放大渲染时等效于 300+ 像素的大半径真高斯模糊
             blur.setBlurRadius(32.0)
             blur.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
             item.setGraphicsEffect(blur)
@@ -442,7 +499,6 @@ class FullscreenWidget(QWidget):
             scene.render(bp, QRectF(0, 0, total_w, total_h), QRectF(0, 0, total_w, total_h))
             bp.end()
 
-            # 裁切掉 padding，保留中心无暗边、色彩平滑弥散的完美模糊底图
             return blurred_total.copy(pad, pad, base_w, base_h)
         except Exception:
             return cropped.scaled(
@@ -505,14 +561,14 @@ class FullscreenWidget(QWidget):
     def set_song(self, title: str, artist: str, thumb_bytes: bytes):
         self._title  = title.strip()
         self._artist = artist.strip()
+        self._prev_thumb_pixmap = None
+        self._thumb_crossfade = 1.0
         if thumb_bytes:
             img = QImage.fromData(bytes(thumb_bytes))
             if not img.isNull():
                 self._thumb_pixmap = QPixmap.fromImage(img)
                 self._cover_alpha = 1.0
                 self._target_cover_alpha = 1.0
-                self._loading_progress = 1.0
-                self._target_loading_progress = 1.0
             else:
                 self._thumb_pixmap = None
                 self._cover_alpha = 0.0
@@ -527,16 +583,29 @@ class FullscreenWidget(QWidget):
         self.update()
 
     def update_hd_cover(self, hd_cover_bytes: bytes):
-        if hd_cover_bytes:
-            img = QImage.fromData(bytes(hd_cover_bytes))
-            if not img.isNull():
-                self._thumb_pixmap = QPixmap.fromImage(img)
-                self._cover_alpha = 0.0
-                self._target_cover_alpha = 1.0
-                self._target_loading_progress = 1.0
-                self._update_background(self._thumb_pixmap)
-                self._update_ambient_palette(self._thumb_pixmap)
-                self.update()
+        if not hd_cover_bytes:
+            return
+        img = QImage.fromData(bytes(hd_cover_bytes))
+        if img.isNull():
+            return
+        new_pixmap = QPixmap.fromImage(img)
+        if self._thumb_pixmap and not self._thumb_pixmap.isNull():
+            # 已有封面：平滑 Crossfade 替换
+            self._prev_thumb_pixmap = self._thumb_pixmap
+            self._thumb_crossfade = 0.0
+            self._thumb_pixmap = new_pixmap
+            self._cover_alpha = 1.0
+            self._target_cover_alpha = 1.0
+        else:
+            self._prev_thumb_pixmap = None
+            self._thumb_crossfade = 1.0
+            self._thumb_pixmap = new_pixmap
+            self._cover_alpha = 0.0
+            self._target_cover_alpha = 1.0
+        self._target_loading_progress = 1.0
+        self._update_background(self._thumb_pixmap)
+        self._update_ambient_palette(self._thumb_pixmap)
+        self.update()
 
     def update_display_title(self, title: str):
         """更新歌曲展示标题（如异步解析到副标题/别名）"""
@@ -587,15 +656,25 @@ class FullscreenWidget(QWidget):
         else:
             self._bg_crossfade = 1.0
 
+        # 封面高清替换平滑交叉淡入 (Crossfade)
+        if self._thumb_crossfade < 1.0:
+            diff_cf = 1.0 - self._thumb_crossfade
+            if diff_cf > 0.01:
+                self._thumb_crossfade += diff_cf * 0.16
+            else:
+                self._thumb_crossfade = 1.0
+                self._prev_thumb_pixmap = None
+
         self._loading_spinner_angle = (self._loading_spinner_angle + 2.5) % 360.0
         self.update()
 
-    def reset_loading_progress(self) -> None:
+    def reset_loading_progress(self, keep_cover: bool = False) -> None:
         """重置加载进度，开启圆环动画"""
         self._loading_progress = 0.0
         self._target_loading_progress = 0.10
-        self._cover_alpha = 0.0
-        self._target_cover_alpha = 0.0
+        if not keep_cover:
+            self._cover_alpha = 0.0
+            self._target_cover_alpha = 0.0
         self._loading_spinner_angle = 0.0
         self.update()
 
@@ -626,10 +705,10 @@ class FullscreenWidget(QWidget):
             else:
                 painter.drawPixmap(0, 0, w, h, self._curr_bg_pixmap)
 
-            # ── 2. 半透明暗色调和蒙层 (消除死气黑灰感，透出封面温暖/清冷色彩氛围，同时保证白色歌词对比度) ──
+            # ── 2. 半透明暗色蒙层 ──
             painter.fillRect(0, 0, w, h, QColor(10, 12, 16, 115))
         else:
-            # 容错降级：无封面时的优雅暗夜基底
+            # 容错降级：无封面时的默认深色背景
             painter.fillRect(0, 0, w, h, QColor(16, 17, 23))
             glow_center = QRadialGradient(w * 0.5, h * 0.45, max(w, h) * 0.55)
             c_c = self._ambient_col_center
@@ -639,7 +718,7 @@ class FullscreenWidget(QWidget):
             glow_center.setColorAt(1.0, QColor(0, 0, 0, 0))
             painter.fillRect(0, 0, w, h, QBrush(glow_center))
 
-        # ── 3. 顶部微暗角与底部控制台暗角渐变 (Vignette，令边缘文字更清晰立体) ──
+        # ── 3. 顶部与底部暗角渐变 ──
         top_grad = QLinearGradient(0, 0, 0, 140)
         top_grad.setColorAt(0.0, QColor(8, 10, 14, 110))
         top_grad.setColorAt(1.0, QColor(8, 10, 14, 0))
@@ -710,18 +789,38 @@ class FullscreenWidget(QWidget):
             painter.drawPixmap(int(glow_rect.x()), int(glow_rect.y()), glow_pix)
             painter.restore()
 
-            # 圆角封面
+            # 圆角封面（支持无缝 Crossfade）
             path = QPainterPath()
             path.addRoundedRect(cover_rect, 12.0, 12.0)
             painter.save()
             painter.setClipPath(path)
-            painter.setOpacity(self._cover_alpha)
-            scaled_thumb = self._thumb_pixmap.scaled(
-                thumb_size * 2, thumb_size * 2,
-                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            painter.drawPixmap(cover_rect.toRect(), scaled_thumb)
+            target_rect = cover_rect.toRect()
+
+            if self._prev_thumb_pixmap and not self._prev_thumb_pixmap.isNull() and self._thumb_crossfade < 1.0:
+                painter.setOpacity(self._cover_alpha)
+                scaled_prev = self._prev_thumb_pixmap.scaled(
+                    thumb_size * 2, thumb_size * 2,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                painter.drawPixmap(target_rect, scaled_prev)
+
+                painter.setOpacity(self._cover_alpha * self._thumb_crossfade)
+                scaled_curr = self._thumb_pixmap.scaled(
+                    thumb_size * 2, thumb_size * 2,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                painter.drawPixmap(target_rect, scaled_curr)
+            else:
+                painter.setOpacity(self._cover_alpha)
+                scaled_thumb = self._thumb_pixmap.scaled(
+                    thumb_size * 2, thumb_size * 2,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                painter.drawPixmap(target_rect, scaled_thumb)
+
             painter.restore()
 
         tx = margin + thumb_size + 16
@@ -783,12 +882,18 @@ class FullscreenWidget(QWidget):
         menu.addSeparator()
         label = ("✓" if self._canvas._show_translation else " ") + "  显示译文"
         act_tr = menu.addAction(label)
+        label_ro = ("✓" if self._canvas._show_romaji else " ") + "  显示罗马音"
+        act_ro = menu.addAction(label_ro)
+        label_sec = ("✓" if settings.get_parse_sections() else " ") + "  段落解析"
+        act_sec = menu.addAction(label_sec)
         menu.addSeparator()
         act_quit = menu.addAction("✕  退出")
 
         act_ov.triggered.connect(lambda: self._ctrl.switch_mode("overlay"))
         act_sett.triggered.connect(self._ctrl.open_settings)
         act_tr.triggered.connect(self._toggle_translation)
+        act_ro.triggered.connect(self._toggle_romaji)
+        act_sec.triggered.connect(self._toggle_parse_sections)
         act_quit.triggered.connect(QApplication.quit)
         menu.exec(e.globalPos())
 
@@ -796,6 +901,18 @@ class FullscreenWidget(QWidget):
         show = not self._canvas._show_translation
         self._canvas.set_show_translation(show)
         settings.set_show_translation(show)
+
+    def _toggle_romaji(self):
+        show = not self._canvas._show_romaji
+        self._canvas.set_show_romaji(show)
+        settings.set_show_romaji(show)
+
+    def _toggle_parse_sections(self):
+        cur = settings.get_parse_sections()
+        settings.set_parse_sections(not cur)
+        self._canvas.set_parse_sections(not cur)
+        if hasattr(self._ctrl, "_reload_current_song_lyrics"):
+            self._ctrl._reload_current_song_lyrics()
 
     def reload_settings(self):
         self._canvas.reload_settings()

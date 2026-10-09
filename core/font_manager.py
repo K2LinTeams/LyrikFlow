@@ -15,7 +15,7 @@ except ImportError:
     import settings
 
 
-# ── 系统保底 Fallback 字体栈（字体缺失或未覆盖字形时的回退）────────────────
+# ── 默认回退字体族 ───────────────────────────────────────────
 SYSTEM_FALLBACK_FAMILIES = [
     "Comfortaa",
     "YouYuan",
@@ -136,7 +136,7 @@ def scan_fonts() -> list[FontItem]:
             fams = _FILE_TO_FAMILIES[fpath]
 
         if fid < 0 and not fams:
-            # 加载失败（退避记录）
+            # 字体加载失败
             base_name = os.path.splitext(fname)[0]
             if base_name not in family_map:
                 family_map[base_name] = FontItem(
@@ -181,7 +181,7 @@ def scan_fonts() -> list[FontItem]:
     ordered_items: list[FontItem] = []
     processed_families: set[str] = set()
 
-    # 智能查找 family 项（支持严格相等、大小写不敏感匹配、文件名基名匹配）
+    # 匹配字体项（支持精确匹配、忽略大小写匹配与文件名匹配）
     def find_item_for_family(target_name: str) -> Optional[FontItem]:
         if target_name in family_map:
             return family_map[target_name]
@@ -195,7 +195,7 @@ def scan_fonts() -> list[FontItem]:
                     return v
         return None
 
-    # 1. 优先按用户已配置的次序排列
+    # 1. 优先按已保存配置排序
     for conf in saved_configs:
         fam = conf.get("family", "")
         if not fam:
@@ -208,7 +208,7 @@ def scan_fonts() -> list[FontItem]:
                 ordered_items.append(matched)
                 processed_families.add(matched.family)
         else:
-            # 记录缺失但曾配置过的字体（退避降级）
+            # 记录配置中存在但本地缺失的字体项
             ordered_items.append(
                 FontItem(
                     family=fam,
@@ -222,7 +222,7 @@ def scan_fonts() -> list[FontItem]:
             )
             processed_families.add(fam)
 
-    # 2. 新扫描到但尚未保存过的本地字体追加在末尾，默认启用
+    # 2. 追加新扫描到但未配置过的字体
     for fam, item in family_map.items():
         if fam not in processed_families:
             ordered_items.append(item)
@@ -249,11 +249,8 @@ def save_font_items(items: list[FontItem]) -> None:
 
 def get_effective_font_families() -> list[str]:
     """
-    计算当前生效的字体族名退避列表。
-    优先级规则：
-    1. 用户启用且有效的本地字体（严格按优先级次序排列）
-    2. 系统通用回退字体栈 (SYSTEM_FALLBACK_FAMILIES)
-    去重并保持次序。
+    获取生效的字体族名回退列表：
+    已启用的有效本地字体 + 默认回退字体栈。
     """
     items = get_font_items()
     active_local: list[str] = [
@@ -296,9 +293,7 @@ def make_app_font(
     weight: Optional[QFont.Weight] = None,
     families: Optional[list[str]] = None,
 ) -> QFont:
-    """
-    统一字体构建器，注入当前完整的退避字体族名列表。
-    """
+    """构建 QFont 并应用生效的字体回退栈"""
     f = QFont()
     f.setFamilies(families if families is not None else get_effective_font_families())
     f.setPointSize(size)

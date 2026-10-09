@@ -34,7 +34,7 @@ def main():
     app.setOrganizationName("LyrikFlow")
     app.setQuitOnLastWindowClosed(False)
 
-    # 自动扫描并载入 data/fonts 目录下的本地字体栈（支持优先级与退避）
+    # 扫描并加载本地字体
     font_manager.scan_fonts()
     app.setFont(font_manager.make_app_font(10))
 

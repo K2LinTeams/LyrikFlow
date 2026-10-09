@@ -1,6 +1,5 @@
 """
 settings_dialog.py — 设置对话框
-支持字体扫描、自定义字体排序、Fallback 链路展示与参数配置持久化。
 """
 from __future__ import annotations
 
@@ -8,20 +7,22 @@ import copy
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QSize, QRectF, pyqtProperty, QPropertyAnimation, QEasingCurve, QPoint
-from PyQt6.QtGui import QColor, QPainter, QPen, QFont
+from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QImage, QPixmap, QPainterPath
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
     QLineEdit, QPushButton, QSpinBox, QWidget,
     QScrollArea, QStackedWidget, QFrame, QSizePolicy,
-    QAbstractButton, QApplication, QGraphicsDropShadowEffect
+    QAbstractButton, QApplication, QGraphicsDropShadowEffect,
+    QCheckBox
 )
 
 try:
-    from core import settings, font_manager
+    from core import settings, font_manager, db_cache
     from core.font_manager import FontItem
 except ImportError:
     import settings
     import font_manager
+    import db_cache
     from font_manager import FontItem
 
 
@@ -411,13 +412,125 @@ class MD3Card(QFrame):
         )
 
 
+class CoverThumbnailWidget(QWidget):
+    """歌曲封面缩略图控件"""
+    def __init__(self, thumb_bytes: Optional[bytes] = None, size: int = 50, parent=None):
+        super().__init__(parent)
+        self._size = size
+        self._pixmap: Optional[QPixmap] = None
+        self.setFixedSize(size + 10, size + 10)
+        if thumb_bytes:
+            img = QImage.fromData(bytes(thumb_bytes))
+            if not img.isNull():
+                self._pixmap = QPixmap.fromImage(img)
+
+    def set_cover(self, thumb_bytes: Optional[bytes]):
+        if thumb_bytes:
+            img = QImage.fromData(bytes(thumb_bytes))
+            if not img.isNull():
+                self._pixmap = QPixmap.fromImage(img)
+            else:
+                self._pixmap = None
+        else:
+            self._pixmap = None
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+
+        margin = 5.0
+        s = float(self._size)
+        cover_rect = QRectF(margin, margin, s, s)
+        radius = 12.0
+
+        if self._pixmap and not self._pixmap.isNull():
+            # 1. 底层环境光晕
+            glow_rect = cover_rect.adjusted(-4, -4, 4, 4)
+            glow_pix = self._pixmap.scaled(
+                16, 16,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ).scaled(
+                int(glow_rect.width()), int(glow_rect.height()),
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            glow_path = QPainterPath()
+            glow_path.addRoundedRect(glow_rect, radius + 3.0, radius + 3.0)
+            painter.save()
+            painter.setClipPath(glow_path)
+            painter.setOpacity(0.35)
+            painter.drawPixmap(int(glow_rect.x()), int(glow_rect.y()), glow_pix)
+            painter.restore()
+
+            # 2. 封面圆角裁切
+            path = QPainterPath()
+            path.addRoundedRect(cover_rect, radius, radius)
+            painter.save()
+            painter.setClipPath(path)
+            scaled = self._pixmap.scaled(
+                int(s * 2), int(s * 2),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            painter.drawPixmap(cover_rect.toRect(), scaled)
+            painter.restore()
+
+            # 3. 边框
+            painter.save()
+            inner_pen = QPen(QColor(255, 255, 255, 220), 1.5)
+            painter.setPen(inner_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(cover_rect, radius, radius)
+
+            outer_pen = QPen(QColor(180, 200, 230, 90), 1.0)
+            painter.setPen(outer_pen)
+            painter.drawRoundedRect(cover_rect.adjusted(-0.5, -0.5, 0.5, 0.5), radius + 0.5, radius + 0.5)
+            painter.restore()
+
+        else:
+            # 待机占位图
+            bg_path = QPainterPath()
+            bg_path.addRoundedRect(cover_rect, radius, radius)
+            painter.fillPath(bg_path, QColor(228, 238, 252))
+
+            border_pen = QPen(QColor(198, 216, 248), 1.5)
+            painter.setPen(border_pen)
+            painter.drawRoundedRect(cover_rect, radius, radius)
+
+            painter.setPen(QColor(11, 87, 208))
+            f = QFont("Segoe UI Symbol", 18, QFont.Weight.Bold)
+            painter.setFont(f)
+            painter.drawText(cover_rect, int(Qt.AlignmentFlag.AlignCenter), "♫")
+
+
 # ── 主设置对话框 ──────────────────────────────────────────────────────────────
 class SettingsDialog(QDialog):
-    def __init__(self, parent=None, overlay_widget=None):
+    def __init__(
+        self,
+        parent=None,
+        controller=None,
+        overlay_widget=None,
+        current_title: str = "",
+        current_artist: str = "",
+        thumb_bytes: Optional[bytes] = None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("LyrikFlow — 设置与偏好")
+        self._controller = controller
         self._overlay_widget = overlay_widget
+        self._current_title = (current_title or "").strip()
+        self._current_artist = (current_artist or "").strip()
+        self._thumb_bytes = thumb_bytes
+        if not self._thumb_bytes and self._current_title:
+            cached = db_cache.get_song_cache(self._current_title, self._current_artist)
+            if cached and cached.get("hd_cover"):
+                self._thumb_bytes = cached["hd_cover"]
+        self._song_offsets_draft: dict[str, int] = dict(settings.get_song_offsets())
         self._initial_opacity = settings.get_opacity()
+        self._initial_offset = settings.get_effective_song_offset(self._current_title, self._current_artist)
 
         # 移除系统原生标题栏与冗余窗口控件，呈现现代无边框圆角卡片
         self.setWindowFlags(
@@ -443,9 +556,11 @@ class SettingsDialog(QDialog):
         self._build_ui()
 
     def reject(self):
-        # 取消时还原悬浮窗实时不透明度
+        # 取消时还原悬浮窗实时不透明度与初始偏移量
         if self._overlay_widget:
             self._overlay_widget.set_live_opacity(self._initial_opacity)
+        if self._controller:
+            self._controller.preview_offset(self._initial_offset)
         super().reject()
 
     def _center_on_screen(self):
@@ -675,7 +790,7 @@ class SettingsDialog(QDialog):
         scroll.setWidget(widget)
         return scroll
 
-    # ── TAB 1: 字体管理与退避页面 ─────────────────────────────────────────────
+    # ── 字体管理设置 ─────────────────────────────────────────────────────────
     def _create_font_page(self) -> QWidget:
         page = QWidget()
         l = QVBoxLayout(page)
@@ -1010,11 +1125,16 @@ class SettingsDialog(QDialog):
         self._lbl_prev_cur.setStyleSheet("background: transparent; border: none; color: #FFFFFF; font-weight: bold;")
         self._lbl_prev_cur.setWordWrap(True)
 
+        self._lbl_prev_roma = QLabel("fu ka kai na, fu kan zen na ma hou")
+        self._lbl_prev_roma.setStyleSheet("background: transparent; border: none; color: #A0D8EF;")
+        self._lbl_prev_roma.setWordWrap(True)
+
         self._lbl_prev_trans = QLabel("不可解的、不完全的魔法")
         self._lbl_prev_trans.setStyleSheet("background: transparent; border: none; color: #82B1FF;")
         self._lbl_prev_trans.setWordWrap(True)
 
         prev_layout.addWidget(self._lbl_prev_cur)
+        prev_layout.addWidget(self._lbl_prev_roma)
         prev_layout.addWidget(self._lbl_prev_trans)
         fl.addWidget(self._preview_card)
 
@@ -1044,6 +1164,30 @@ class SettingsDialog(QDialog):
         )
         trans_l.addWidget(self._switch_trans)
         l.addWidget(card_trans)
+
+        # 4. 功能开关卡片：罗马音 (Romaji)
+        card_roma = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
+        roma_l = QHBoxLayout(card_roma)
+        roma_l.setContentsMargins(18, 14, 18, 14)
+
+        roma_v = QVBoxLayout()
+        roma_v.setSpacing(2)
+        lbl_roma_t = QLabel("显示罗马音 (Romaji)")
+        lbl_roma_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
+        lbl_roma_d = QLabel("若歌曲包含罗马音注音则同步显示（支持网易云与 QQ 音乐）")
+        lbl_roma_d.setStyleSheet("font-size: 11px; color: #6E7781;")
+        roma_v.addWidget(lbl_roma_t)
+        roma_v.addWidget(lbl_roma_d)
+        roma_l.addLayout(roma_v, 1)
+
+        self._switch_roma = MD3Switch()
+        self._switch_roma.setChecked(settings.get_show_romaji())
+        self._lbl_prev_roma.setVisible(settings.get_show_romaji())
+        self._switch_roma.toggled.connect(
+            lambda checked: self._lbl_prev_roma.setVisible(checked)
+        )
+        roma_l.addWidget(self._switch_roma)
+        l.addWidget(card_roma)
 
         # 4. 功能开关卡片：非逐字歌词进度条
         card_prog = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
@@ -1125,6 +1269,7 @@ class SettingsDialog(QDialog):
         ctx_sz = self._spin_ctx.value()
         active_families = [it.family for it in self._font_items if it.enabled and it.is_valid]
         self._lbl_prev_cur.setFont(font_manager.make_app_font(cur_sz, bold=True, families=active_families))
+        self._lbl_prev_roma.setFont(font_manager.make_app_font(ctx_sz, bold=False, families=active_families))
         self._lbl_prev_trans.setFont(font_manager.make_app_font(ctx_sz, bold=False, families=active_families))
 
     # ── TAB 3: 播放器与同步设置 ───────────────────────────────────────────────
@@ -1180,35 +1325,250 @@ class SettingsDialog(QDialog):
         card_sync = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
         syncl = QVBoxLayout(card_sync)
         syncl.setContentsMargins(18, 14, 18, 14)
-        syncl.setSpacing(10)
+        syncl.setSpacing(12)
 
-        syncl.addWidget(QLabel("歌词延迟微调", styleSheet="font-size: 14px; font-weight: 600; color: #1B1F24;"))
+        syncl.addWidget(QLabel("歌词同步与时间微调", styleSheet="font-size: 14px; font-weight: 600; color: #1B1F24;"))
         syncl.addWidget(
-            QLabel("毫秒 ms（正值提前，负值延后）：",
+            QLabel("时间单位：毫秒 ms（正值提前，负值延后）。可为当前播放的歌曲单独设定专属偏移，未单独设置的歌曲将使用全局默认偏移。",
                    styleSheet="font-size: 11px; color: #6E7781;")
         )
 
-        row_spin = QHBoxLayout()
+        # ── 子区块 1：当前正在播放歌曲单独微调 ──────────────────────────────────
+        card_cur_song = MD3Card(bg="#F6F9FE", border="#C6D8F8", radius=14)
+        csl = QVBoxLayout(card_cur_song)
+        csl.setContentsMargins(14, 12, 14, 12)
+        csl.setSpacing(8)
+
+        if self._current_title:
+            row_song_header = QHBoxLayout()
+            row_song_header.setSpacing(12)
+
+            # 封面缩略图
+            self._cover_widget = CoverThumbnailWidget(thumb_bytes=self._thumb_bytes, size=52)
+            row_song_header.addWidget(self._cover_widget)
+
+            # 右侧：当前歌曲名称与单曲专属配置复选框
+            v_song_meta = QVBoxLayout()
+            v_song_meta.setSpacing(6)
+
+            song_display = settings.make_song_key(self._current_title, self._current_artist)
+            lbl_song_name = QLabel(f"当前歌曲：{song_display}")
+            lbl_song_name.setStyleSheet("font-size: 13px; font-weight: 700; color: #0B57D0;")
+            lbl_song_name.setWordWrap(True)
+            v_song_meta.addWidget(lbl_song_name)
+
+            row_chk_badge = QHBoxLayout()
+            self._chk_song_custom = QCheckBox("为此歌曲设置专属独立偏移量")
+            self._chk_song_custom.setStyleSheet("font-size: 12px; font-weight: 600; color: #1B1F24;")
+            row_chk_badge.addWidget(self._chk_song_custom)
+            row_chk_badge.addSpacing(10)
+
+            self._lbl_live_offset_badge = QLabel("实时生效：0ms")
+            self._lbl_live_offset_badge.setStyleSheet(
+                "background: #E8F0FE; color: #1967D2; border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: bold;"
+            )
+            row_chk_badge.addWidget(self._lbl_live_offset_badge)
+            row_chk_badge.addStretch()
+            v_song_meta.addLayout(row_chk_badge)
+
+            row_song_header.addLayout(v_song_meta, 1)
+            csl.addLayout(row_song_header)
+
+            # 微调 SpinBox 与快捷药丸
+            row_song_spin = QHBoxLayout()
+            self._spin_song_off = QSpinBox()
+            self._spin_song_off.setRange(-30000, 30000)
+            self._spin_song_off.setSingleStep(100)
+
+            # 获取当前歌是否已有单独配置
+            existing_song_off = settings.get_song_offset(self._current_title, self._current_artist)
+            if existing_song_off is not None:
+                self._chk_song_custom.setChecked(True)
+                self._spin_song_off.setValue(existing_song_off)
+                self._spin_song_off.setEnabled(True)
+            else:
+                self._chk_song_custom.setChecked(False)
+                self._spin_song_off.setValue(settings.get_offset_ms())
+                self._spin_song_off.setEnabled(False)
+
+            row_song_spin.addWidget(self._spin_song_off)
+            row_song_spin.addSpacing(6)
+
+            self._song_chip_buttons = []
+            for off, txt in [(-1000, "-1.0s"), (-500, "-0.5s"), (-100, "-0.1s"), (0, "0s"), (100, "+0.1s"), (500, "+0.5s"), (1000, "+1.0s")]:
+                btn = QPushButton(txt)
+                apply_chip(btn)
+                btn.clicked.connect(lambda _, o=off: self._spin_song_off.setValue(o))
+                row_song_spin.addWidget(btn)
+                self._song_chip_buttons.append(btn)
+
+            row_song_spin.addStretch()
+            csl.addLayout(row_song_spin)
+
+            def _toggle_song_custom(checked: bool):
+                self._spin_song_off.setEnabled(checked)
+                for b in self._song_chip_buttons:
+                    b.setEnabled(checked)
+                if not checked and hasattr(self, "_spin_off"):
+                    self._spin_song_off.setValue(self._spin_off.value())
+                self._update_live_offset_preview()
+
+            self._chk_song_custom.toggled.connect(_toggle_song_custom)
+            self._spin_song_off.valueChanged.connect(lambda _: self._update_live_offset_preview())
+            _toggle_song_custom(self._chk_song_custom.isChecked())
+        else:
+            self._chk_song_custom = None
+            self._spin_song_off = None
+            self._lbl_live_offset_badge = None
+            self._song_chip_buttons = []
+            lbl_no_song = QLabel("当前未检测到正在播放的歌曲。\n在音乐播放过程中打开设置，可在此直接针对当前歌曲微调并保存单独偏移量。")
+            lbl_no_song.setStyleSheet("font-size: 12px; color: #6E7781; line-height: 1.4;")
+            csl.addWidget(lbl_no_song)
+
+        syncl.addWidget(card_cur_song)
+
+        # ── 子区块 2：全局默认歌词延迟微调 ────────────────────────────────────
+        syncl.addWidget(QLabel("全局默认偏移（未单独设置的歌曲将使用此项）：", styleSheet="font-size: 13px; font-weight: 600; color: #1B1F24;"))
+        row_global_spin = QHBoxLayout()
         self._spin_off = QSpinBox()
         self._spin_off.setRange(-30000, 30000)
-        self._spin_off.setSingleStep(500)
+        self._spin_off.setSingleStep(100)
         self._spin_off.setValue(settings.get_offset_ms())
-        row_spin.addWidget(self._spin_off)
-        row_spin.addSpacing(10)
+        self._spin_off.valueChanged.connect(lambda _: self._update_live_offset_preview())
+        row_global_spin.addWidget(self._spin_off)
+        row_global_spin.addSpacing(6)
 
-        # 快捷偏移量药丸
-        for off, txt in [(-1000, "-1.0s"), (-500, "-0.5s"), (0, "0s"), (500, "+0.5s"), (1000, "+1.0s")]:
+        for off, txt in [(-1000, "-1.0s"), (-500, "-0.5s"), (-100, "-0.1s"), (0, "0s"), (100, "+0.1s"), (500, "+0.5s"), (1000, "+1.0s")]:
             btn = QPushButton(txt)
             apply_chip(btn)
             btn.clicked.connect(lambda _, o=off: self._spin_off.setValue(o))
-            row_spin.addWidget(btn)
+            row_global_spin.addWidget(btn)
 
-        row_spin.addStretch()
-        syncl.addLayout(row_spin)
+        row_global_spin.addStretch()
+        syncl.addLayout(row_global_spin)
+
+        # ── 子区块 3：已单独配置的歌曲列表与管理 ──────────────────────────────
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("color: #E1E8F5; margin-top: 4px; margin-bottom: 4px;")
+        syncl.addWidget(sep)
+
+        row_list_header = QHBoxLayout()
+        self._lbl_custom_songs_count = QLabel("已单独配置的歌曲列表", styleSheet="font-size: 13px; font-weight: 600; color: #1B1F24;")
+        row_list_header.addWidget(self._lbl_custom_songs_count)
+        row_list_header.addStretch()
+        syncl.addLayout(row_list_header)
+
+        self._custom_songs_container = QVBoxLayout()
+        self._custom_songs_container.setSpacing(6)
+        syncl.addLayout(self._custom_songs_container)
+        self._render_custom_songs_list()
+
+        # 初始同步一次实时微调提示
+        self._update_live_offset_preview()
 
         l.addWidget(card_sync)
         l.addStretch()
         return page
+
+    def _update_live_offset_preview(self):
+        """实时更新当前生效的偏移量预览到播放时间轴"""
+        if not hasattr(self, "_spin_off"):
+            return
+        if self._current_title and hasattr(self, "_chk_song_custom") and self._chk_song_custom is not None:
+            if self._chk_song_custom.isChecked() and hasattr(self, "_spin_song_off") and self._spin_song_off is not None:
+                live_val = self._spin_song_off.value()
+            else:
+                live_val = self._spin_off.value()
+        else:
+            live_val = self._spin_off.value()
+
+        if hasattr(self, "_lbl_live_offset_badge") and self._lbl_live_offset_badge is not None:
+            sign_str = f"+{live_val}ms" if live_val > 0 else f"{live_val}ms"
+            self._lbl_live_offset_badge.setText(f"实时生效：{sign_str}")
+
+        if hasattr(self, "_controller") and self._controller:
+            self._controller.preview_offset(live_val)
+
+    def _render_custom_songs_list(self):
+        while self._custom_songs_container.count():
+            item = self._custom_songs_container.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        count = len(self._song_offsets_draft)
+        self._lbl_custom_songs_count.setText(f"已单独配置的歌曲 ({count} 首)")
+
+        if not self._song_offsets_draft:
+            empty_lbl = QLabel("暂无单独配置的歌曲记录。")
+            empty_lbl.setStyleSheet("color: #8C939E; font-size: 12px; padding: 4px 2px;")
+            self._custom_songs_container.addWidget(empty_lbl)
+            return
+
+        for song_key, offset_val in list(self._song_offsets_draft.items()):
+            row_widget = QFrame()
+            row_widget.setStyleSheet("""
+                QFrame {
+                    background: #F8FAFD;
+                    border: 1px solid #E1E8F5;
+                    border-radius: 10px;
+                    padding: 4px 10px;
+                }
+            """)
+            rl = QHBoxLayout(row_widget)
+            rl.setContentsMargins(6, 4, 6, 4)
+            rl.setSpacing(10)
+
+            lbl_name = QLabel(song_key)
+            lbl_name.setStyleSheet("font-size: 12px; font-weight: 600; color: #1B1F24;")
+            rl.addWidget(lbl_name, 1)
+
+            # 偏移微调 SpinBox
+            spin = QSpinBox()
+            spin.setRange(-30000, 30000)
+            spin.setSingleStep(100)
+            spin.setValue(offset_val)
+            spin.setFixedWidth(90)
+            spin.valueChanged.connect(lambda val, k=song_key: self._on_draft_song_offset_changed(k, val))
+            rl.addWidget(spin)
+
+            sign_str = f"+{offset_val}ms" if offset_val > 0 else f"{offset_val}ms"
+            badge = QLabel(sign_str)
+            badge.setStyleSheet("background: #E8F0FE; color: #1967D2; border-radius: 6px; padding: 2px 6px; font-size: 11px; font-weight: bold;")
+            badge.setFixedWidth(65)
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            rl.addWidget(badge)
+            spin.valueChanged.connect(lambda val, b=badge: b.setText(f"+{val}ms" if val > 0 else f"{val}ms"))
+
+            # 删除按钮
+            btn_del = QPushButton("✕")
+            apply_circle_btn(btn_del, 24)
+            btn_del.setToolTip("移除此歌曲的单独配置（恢复使用全局默认偏移）")
+            btn_del.clicked.connect(lambda _, k=song_key: self._remove_draft_song_offset(k))
+            rl.addWidget(btn_del)
+
+            self._custom_songs_container.addWidget(row_widget)
+
+    def _on_draft_song_offset_changed(self, song_key: str, val: int):
+        self._song_offsets_draft[song_key] = val
+        # 如果修改的是当前正在播放的歌曲，同步到当前歌曲 spinbox 并实时预览
+        if self._current_title and hasattr(self, "_spin_song_off") and self._spin_song_off is not None:
+            cur_key = settings.make_song_key(self._current_title, self._current_artist)
+            if song_key == cur_key:
+                self._spin_song_off.blockSignals(True)
+                self._spin_song_off.setValue(val)
+                self._spin_song_off.blockSignals(False)
+                self._update_live_offset_preview()
+
+    def _remove_draft_song_offset(self, song_key: str):
+        self._song_offsets_draft.pop(song_key, None)
+        # 如果删除的是当前播放的歌曲，同步取消专属勾选
+        if self._current_title and hasattr(self, "_chk_song_custom") and self._chk_song_custom is not None:
+            cur_key = settings.make_song_key(self._current_title, self._current_artist)
+            if song_key == cur_key:
+                self._chk_song_custom.setChecked(False)
+        self._render_custom_songs_list()
+        self._update_live_offset_preview()
 
     def _add_app_preset(self, app_name: str):
         cur = [a.strip() for a in self._apps_edit.text().split(",") if a.strip()]
@@ -1223,11 +1583,19 @@ class SettingsDialog(QDialog):
         self._spin_cur.setValue(28)
         self._spin_ctx.setValue(14)
         self._switch_trans.setChecked(True)
+        self._switch_roma.setChecked(False)
         self._switch_progress.setChecked(True)
         self._switch_sections.setChecked(True)
         self._spin_fs_lines.setValue(5)
         self._apps_edit.setText("cloudmusic.exe")
         self._spin_off.setValue(0)
+        if self._current_title and hasattr(self, "_chk_song_custom") and self._chk_song_custom is not None:
+            self._chk_song_custom.setChecked(False)
+            self._spin_song_off.setValue(0)
+            self._spin_song_off.setEnabled(False)
+        self._song_offsets_draft.clear()
+        self._render_custom_songs_list()
+        self._update_live_offset_preview()
         for item in self._font_items:
             item.enabled = True
         self._render_font_items()
@@ -1243,6 +1611,7 @@ class SettingsDialog(QDialog):
         apps = [a.strip() for a in apps_raw.split(",") if a.strip()]
         settings.set_watched_apps(apps)
         settings.set_show_translation(self._switch_trans.isChecked())
+        settings.set_show_romaji(self._switch_roma.isChecked())
         settings.set_show_line_progress(self._switch_progress.isChecked())
         settings.set_parse_sections(self._switch_sections.isChecked())
         settings.set_font_size_current(self._spin_cur.value())
@@ -1250,5 +1619,19 @@ class SettingsDialog(QDialog):
         settings.set_opacity(self._slider_op.value() / 100.0)
         settings.set_offset_ms(self._spin_off.value())
         settings.set_fullscreen_context_lines(self._spin_fs_lines.value())
+
+        # 3. 歌曲独立偏移配置持久化
+        if self._current_title and hasattr(self, "_chk_song_custom") and self._chk_song_custom is not None:
+            cur_key = settings.make_song_key(self._current_title, self._current_artist)
+            if self._chk_song_custom.isChecked():
+                val = self._spin_song_off.value()
+                self._song_offsets_draft[cur_key] = val
+                db_cache.update_song_offset(self._current_title, self._current_artist, val)
+            else:
+                self._song_offsets_draft.pop(cur_key, None)
+                self._song_offsets_draft.pop(f"{self._current_title}|||{self._current_artist}", None)
+                db_cache.update_song_offset(self._current_title, self._current_artist, 0)
+
+        settings.set_all_song_offsets(self._song_offsets_draft)
 
         self.accept()

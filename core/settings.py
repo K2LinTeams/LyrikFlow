@@ -1,6 +1,5 @@
 """
 settings.py — 用户设置管理
-使用 YAML 文件进行持久化存储 (config.yaml)，提供合理默认值，并支持无缝迁移原有 QSettings 设置。
 """
 from __future__ import annotations
 
@@ -43,8 +42,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "lyrics": {
         "show_translation": True,
+        "show_romaji": False,
+        "secondary_mode": "prefer_trans",
         "show_line_progress": True,
         "offset_ms": 0,
+        "song_offsets": {},
         "parse_sections": True,
     },
     "fullscreen": {
@@ -102,6 +104,7 @@ def _migrate_from_qsettings(cfg: dict[str, Any]) -> dict[str, Any]:
                 cfg["font"]["size_current"] = int(s.value("font/size_current"))
             except Exception:
                 pass
+
         if "font/size_context" in keys:
             try:
                 cfg["font"]["size_context"] = int(s.value("font/size_context"))
@@ -127,11 +130,31 @@ def _migrate_from_qsettings(cfg: dict[str, Any]) -> dict[str, Any]:
             else:
                 cfg["lyrics"]["show_translation"] = bool(raw_tr)
 
+        if "lyrics/show_romaji" in keys:
+            raw_ro = s.value("lyrics/show_romaji")
+            if isinstance(raw_ro, str):
+                cfg["lyrics"]["show_romaji"] = raw_ro.lower() in ("true", "1")
+            else:
+                cfg["lyrics"]["show_romaji"] = bool(raw_ro)
+
+        if "lyrics/secondary_mode" in keys:
+            cfg["lyrics"]["secondary_mode"] = str(s.value("lyrics/secondary_mode"))
+
         if "lyrics/offset_ms" in keys:
             try:
                 cfg["lyrics"]["offset_ms"] = int(s.value("lyrics/offset_ms"))
             except Exception:
                 pass
+
+        if "lyrics/song_offsets" in keys:
+            raw_so = s.value("lyrics/song_offsets")
+            if raw_so:
+                try:
+                    parsed_so = json.loads(str(raw_so)) if isinstance(raw_so, str) else raw_so
+                    if isinstance(parsed_so, dict):
+                        cfg["lyrics"]["song_offsets"] = {str(k): int(v) for k, v in parsed_so.items()}
+                except Exception:
+                    pass
 
         if "lyrics/parse_sections" in keys:
             raw_ps = s.value("lyrics/parse_sections")
@@ -254,6 +277,13 @@ def get_fullscreen_context_lines() -> int:
 def get_show_translation() -> bool:
     return bool(_get(["lyrics", "show_translation"], True))
 
+def get_show_romaji() -> bool:
+    return bool(_get(["lyrics", "show_romaji"], False))
+
+def get_secondary_mode() -> str:
+    """副行显示偏好：'prefer_trans' (优先译文), 'prefer_romaji' (优先罗马音), 'both' (并排显示)"""
+    return str(_get(["lyrics", "secondary_mode"], "prefer_trans"))
+
 def get_show_line_progress() -> bool:
     """无逐字歌词时是否在当前行下方显示单句进度条"""
     return bool(_get(["lyrics", "show_line_progress"], True))
@@ -290,6 +320,57 @@ def get_overlay_geometry() -> tuple[int, int, int, int] | None:
 def get_offset_ms() -> int:
     return int(_get(["lyrics", "offset_ms"], 0))
 
+def make_song_key(title: str, artist: str = "") -> str:
+    """生成标准化且易读的歌曲键名（例如：'晴天 - 周杰伦'）"""
+    t = str(title or "").strip()
+    a = str(artist or "").strip()
+    return f"{t} - {a}" if a else t
+
+def get_song_offsets() -> dict[str, int]:
+    """读取所有单独配置的歌曲偏移字典 {song_key: offset_ms}"""
+    val = _get(["lyrics", "song_offsets"], {})
+    if isinstance(val, dict):
+        res: dict[str, int] = {}
+        for k, v in val.items():
+            if str(k).strip():
+                try:
+                    res[str(k).strip()] = int(v)
+                except (ValueError, TypeError):
+                    pass
+        return res
+    return {}
+
+def get_song_offset(title: str, artist: str = "") -> Optional[int]:
+    """获取指定歌曲的单独偏移量（毫秒），未单独配置时返回 None"""
+    if not title:
+        return None
+    offsets = get_song_offsets()
+    key_std = make_song_key(title, artist)
+    if key_std in offsets:
+        return offsets[key_std]
+
+    key_pipe = f"{title.strip()}|||{artist.strip()}"
+    if key_pipe in offsets:
+        return offsets[key_pipe]
+
+    # 大小写不敏感及格式变体匹配
+    t_lower = title.strip().lower()
+    a_lower = artist.strip().lower()
+    for k, v in offsets.items():
+        k_lower = k.lower().strip()
+        if k_lower == key_std.lower() or k_lower == key_pipe.lower():
+            return v
+        if a_lower and k_lower == f"{a_lower} - {t_lower}":
+            return v
+    return None
+
+def get_effective_song_offset(title: str, artist: str = "") -> int:
+    """获取指定歌曲的最终生效偏移量（优先独立配置，未配置时使用全局默认偏移）"""
+    val = get_song_offset(title, artist)
+    if val is not None:
+        return val
+    return get_offset_ms()
+
 def get_font_configs() -> list[dict]:
     """读取保存的字体配置列表 [{'family': str, 'enabled': bool}]"""
     val = _get(["font", "configs"], [])
@@ -321,6 +402,12 @@ def set_fullscreen_context_lines(v: int) -> None:
 def set_show_translation(v: bool) -> None:
     _set(["lyrics", "show_translation"], bool(v))
 
+def set_show_romaji(v: bool) -> None:
+    _set(["lyrics", "show_romaji"], bool(v))
+
+def set_secondary_mode(v: str) -> None:
+    _set(["lyrics", "secondary_mode"], str(v))
+
 def set_show_line_progress(v: bool) -> None:
     _set(["lyrics", "show_line_progress"], bool(v))
 
@@ -346,6 +433,46 @@ def set_overlay_geometry(x: int, y: int, w: int, h: int) -> None:
 
 def set_offset_ms(v: int) -> None:
     _set(["lyrics", "offset_ms"], int(v))
+
+def set_song_offset(title: str, artist: str = "", offset_ms: int = 0) -> None:
+    """设置单首歌曲的独立偏移量并持久化到 YAML"""
+    if not title:
+        return
+    with _lock:
+        key = make_song_key(title, artist)
+        offsets = get_song_offsets()
+        offsets[key] = int(offset_ms)
+        _set(["lyrics", "song_offsets"], offsets)
+
+def remove_song_offset(title: str, artist: str = "") -> None:
+    """移除单首歌曲的独立偏移量配置（恢复使用全局默认值）"""
+    if not title:
+        return
+    with _lock:
+        offsets = get_song_offsets()
+        key_std = make_song_key(title, artist)
+        key_pipe = f"{title.strip()}|||{artist.strip()}"
+        keys_to_del = [
+            k for k in offsets
+            if k.lower() in (key_std.lower(), key_pipe.lower())
+        ]
+        if keys_to_del:
+            for k in keys_to_del:
+                offsets.pop(k, None)
+            _set(["lyrics", "song_offsets"], offsets)
+
+def set_all_song_offsets(offsets: dict[str, int]) -> None:
+    """全量更新歌曲独立偏移字典"""
+    with _lock:
+        cleaned: dict[str, int] = {}
+        for k, v in offsets.items():
+            k_str = str(k).strip()
+            if k_str:
+                try:
+                    cleaned[k_str] = int(v)
+                except (ValueError, TypeError):
+                    pass
+        _set(["lyrics", "song_offsets"], cleaned)
 
 def set_font_configs(configs: list[dict]) -> None:
     """保存字体配置列表"""

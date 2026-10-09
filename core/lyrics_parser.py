@@ -1,32 +1,46 @@
 """
-lyrics_parser.py — 歌词解析器
-支持：
-  1. YRC 逐字歌词（包含每个字的开始时间与时长，支持卡拉OK逐字渲染）
-  2. LRC 标准歌词（回退模式）
-  3. 翻译歌词匹配
+core/lyrics_parser.py — 结构化歌词解析与序列化
 """
 from __future__ import annotations
 
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
 class LyricWord:
     time_ms: int       # 该字开始时间（毫秒）
     duration_ms: int   # 该字持续时长（毫秒）
-    text: str          # 字或词
+    text: str          # 字文本
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "time_ms": self.time_ms,
+            "duration_ms": self.duration_ms,
+            "text": self.text,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> LyricWord:
+        return cls(
+            time_ms=int(d.get("time_ms", 0)),
+            duration_ms=int(d.get("duration_ms", 0)),
+            text=str(d.get("text", "")),
+        )
 
 
 @dataclass
 class LyricLine:
     time_ms: int                            # 行开始时间
-    duration_ms: int = 0                    # 行持续时长（YRC 提供，LRC 默认为下一行时间差）
-    text: str = ""                          # 完整文本
-    words: list[LyricWord] = field(default_factory=list) # 逐字列表（若有则为逐字歌词）
-    translation: str = ""                   # 对应译文
+    duration_ms: int = 0                    # 行持续时长
+    text: str = ""                          # 歌词正文文本
+    words: list[LyricWord] = field(default_factory=list) # 逐字列表
+    translation: str = ""                   # 对应译文 (严格为真实译文)
+    romaji: str = ""                        # 对应罗马音 (规范化纯净罗马音)
+    role: str = ""                          # 演唱者/角色名
+    section: str = ""                       # 章节/段落名 (如 副歌, 间奏, Verse, Bridge)
 
     @property
     def end_time_ms(self) -> int:
@@ -35,7 +49,69 @@ class LyricLine:
         if self.words:
             last = self.words[-1]
             return last.time_ms + last.duration_ms
-        return self.time_ms + 4000  # 默认4秒
+        return self.time_ms + 4000
+
+    def get_secondary_text(
+        self,
+        show_translation: bool = True,
+        show_romaji: bool = False,
+        secondary_mode: str = "prefer_trans",
+        parse_sections: bool = True,
+    ) -> str:
+        """获取副行渲染文本：支持真实译文与罗马音按开关及偏好模式返回；无副文本且开启段落解析时返回 章节 · 角色"""
+        tr = self.translation.strip() if show_translation else ""
+        ro = self.romaji.strip() if show_romaji else ""
+
+        if tr and ro:
+            if secondary_mode == "prefer_romaji":
+                return ro
+            elif secondary_mode == "both":
+                return f"{ro}  ·  {tr}"
+            return tr
+        elif tr:
+            return tr
+        elif ro:
+            return ro
+
+        if parse_sections:
+            sec = self.section.strip()
+            role = self.role.strip()
+            if sec and role:
+                return f"{sec} · {role}"
+            return role or sec
+        return ""
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "time_ms": self.time_ms,
+            "duration_ms": self.duration_ms,
+            "text": self.text,
+        }
+        if self.words:
+            d["words"] = [w.to_dict() for w in self.words]
+        if self.translation:
+            d["translation"] = self.translation
+        if self.romaji:
+            d["romaji"] = self.romaji
+        if self.role:
+            d["role"] = self.role
+        if self.section:
+            d["section"] = self.section
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> LyricLine:
+        words = [LyricWord.from_dict(w) for w in d.get("words", [])]
+        return cls(
+            time_ms=int(d.get("time_ms", 0)),
+            duration_ms=int(d.get("duration_ms", 0)),
+            text=str(d.get("text", "")),
+            words=words,
+            translation=str(d.get("translation", "")),
+            romaji=str(d.get("romaji", "")),
+            role=str(d.get("role", "")),
+            section=str(d.get("section", "")),
+        )
 
 
 @dataclass
@@ -43,9 +119,16 @@ class ParsedLyrics:
     lines: list[LyricLine] = field(default_factory=list)
     has_words: bool = False                 # 是否为逐字歌词
     is_instrumental: bool = False           # 是否为纯音乐
+    title: str = ""                         # 歌曲标题
+    artist: str = ""                        # 歌手
+    album: str = ""                         # 专辑名
+    by: str = ""                            # 歌词制作者
+    offset_ms: int = 0                      # 时间偏移 (ms)
+    provider: str = ""                      # 提供源 (netease, qqmusic, lrclib)
+    song_id: str = ""                       # 平台歌曲 ID
 
     def get_line_index(self, time_ms: int) -> int:
-        """二分查找当前时间对应的歌词行索引（-1 为未开始）"""
+        """二分查找当前时间对应的歌词行索引 (-1 为未开始)"""
         if not self.lines:
             return -1
         lo, hi = 0, len(self.lines) - 1
@@ -55,14 +138,114 @@ class ParsedLyrics:
                 lo = mid + 1
             else:
                 hi = mid - 1
-        idx = lo - 1
-        return idx
+        return lo - 1
+
+    def to_dict(self) -> dict[str, Any]:
+        """序列化为统一 JSON 字典"""
+        return {
+            "version": 1,
+            "provider": self.provider,
+            "song_id": self.song_id,
+            "title": self.title,
+            "artist": self.artist,
+            "album": self.album,
+            "by": self.by,
+            "offset_ms": self.offset_ms,
+            "is_verbatim": self.has_words,
+            "is_instrumental": self.is_instrumental,
+            "lines": [line.to_dict() for line in self.lines],
+        }
+
+    def to_json(self, indent: Optional[int] = None) -> str:
+        """导出紧凑结构化 JSON 字符串（默认去除一切无用空白字符）"""
+        if indent is not None:
+            return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
+        return json.dumps(self.to_dict(), ensure_ascii=False, separators=(",", ":"))
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ParsedLyrics:
+        """从结构化 JSON 字典恢复 ParsedLyrics"""
+        lines = [LyricLine.from_dict(line_d) for line_d in d.get("lines", [])]
+        return cls(
+            lines=lines,
+            has_words=bool(d.get("is_verbatim", any(bool(l.words) for l in lines))),
+            is_instrumental=bool(d.get("is_instrumental", False)),
+            title=str(d.get("title", "")),
+            artist=str(d.get("artist", "")),
+            album=str(d.get("album", "")),
+            by=str(d.get("by", "")),
+            offset_ms=int(d.get("offset_ms", 0)),
+            provider=str(d.get("provider", "")),
+            song_id=str(d.get("song_id", "")),
+        )
+
+    @classmethod
+    def from_json(cls, json_str: str) -> ParsedLyrics:
+        """从 JSON 字符串直接极速反序列化 (0ms 零损耗)"""
+        if not json_str or not json_str.strip():
+            return cls()
+        return cls.from_dict(json.loads(json_str))
 
 
-_YRC_LINE_RE = re.compile(r'^\[(\d+),(\d+)\](.*)$')
-_YRC_WORD_RE = re.compile(r'\((\d+),(\d+),\d+\)([^(]+)')
-# 支持标准与各类变体 LRC 时间戳：[mm:ss.xxx], [mm:ss:xxx], [mm:ss]
-_LRC_TIME_RE = re.compile(r'\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]')
+
+# ── 正则表达式 ─────────────────────────────────────────────────────────────
+_YRC_LINE_RE = re.compile(r"^\[(\d+),(\d+)\](.*)$")
+_YRC_WORD_RE = re.compile(r"\((\d+),(\d+),\d+\)([^(]+)")
+_QRC_MS_LINE_RE = re.compile(r"^\[(\d+),(\d+)\](.*)$")
+_QRC_WORD_RE = re.compile(r"([^\(\)]+)\((\d+),(\d+)\)")
+_LRC_TIME_RE = re.compile(r"\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]")
+_HEADER_RE   = re.compile(r"^\[(ti|ar|al|by|offset):(.*)\]$", re.IGNORECASE)
+
+# 规范章节与角色识别（严格限定单行 "人名: " 才作为歌手段落，避免如 "混音工程师: 赵靖" 误判）
+SECTION_STANDALONE_RE = re.compile(
+    r"^(?:[-—–=~*]{1,4}\s*(.+?)\s*[-—–=~*]{1,4}|[【\[](Chorus|Verse(?:\s*\d+)?|Bridge|Intro|Outro|Hook|Pre-Chorus|间奏|前奏|尾奏|副歌|主歌|过渡)[】\]]\s*[:：]?)$",
+    re.IGNORECASE,
+)
+ROLE_STANDALONE_RE = re.compile(r"^[【\[(（<]?([^\s：:【\[\]()]{1,16})[】\])）>]?\s*[:：]$")
+SPACER_RE          = re.compile(r"^[\.·•●…\-\s\xa0]+$")
+NUM_RE             = re.compile(r"^\d+$")
+
+# 幕后演职人员岗位关键字（用于准确排除非歌手信息）
+CREDIT_KEYWORDS = (
+    "作词", "作曲", "编曲", "制作人", "制作", "监制", "企划", "统筹", "出品", "发行",
+    "录音", "混音", "母带", "吉他", "贝斯", "贝司", "鼓手", "打击乐", "键盘", "钢琴", "弦乐", "管乐",
+    "和声", "和音", "文案", "设计", "封面", "摄影", "导演", "剪辑",
+    "录音师", "混音师", "母带师", "录音棚", "录音室", "混音室", "混音棚", "母带室", "工程师",
+    "工作室", "音乐制作", "音频工程", "OP", "SP", "A&R", "Lyrics", "Lyricist", "Composer",
+    "Arranger", "Producer", "Mixing", "Mastering", "Recording", "Sound", "Studio"
+)
+
+
+def _is_credit_keyword(text: str) -> bool:
+    """判断单项名字是否为制作人员职衔（如 '混音', '制作人' 等）"""
+    t = text.strip()
+    t_clean = re.sub(r"^[【\[(（<]+|[】\])）>]+$", "", t).strip().lower()
+    return any(kw.lower() in t_clean for kw in CREDIT_KEYWORDS)
+
+
+def _is_credit_line(text: str) -> bool:
+    """判断单行是否为制作人员名单行（如 '混音工程师: 赵靖', '作词: 方文山' 等）"""
+    t = text.strip()
+    if ":" in t or "：" in t:
+        parts = re.split(r"[:：]", t, maxsplit=1)
+        prefix = parts[0].strip()
+        val = parts[1].strip() if len(parts) > 1 else ""
+        prefix_clean = re.sub(r"^[【\[(（<]+|[】\])）>]+$", "", prefix).strip().lower()
+        if any(kw.lower() in prefix_clean for kw in CREDIT_KEYWORDS):
+            if val:
+                return True
+    return False
+
+INSTRUMENTAL_KEYWORDS = (
+    "纯音乐，请欣赏",
+    "纯音乐,请欣赏",
+    "纯音乐 请欣赏",
+    "请欣赏纯音乐",
+    "没有填词的纯音乐",
+    "此歌曲为纯音乐",
+    "暂无歌词，请欣赏纯音乐",
+    "纯音乐",
+)
 
 
 def _lrc_time_to_ms(m_str: str, s_str: str, ms_str: str) -> int:
@@ -81,285 +264,295 @@ def _lrc_time_to_ms(m_str: str, s_str: str, ms_str: str) -> int:
         ms = 0
     return m * 60_000 + s * 1_000 + ms
 
-# 章节与角色名特殊解析正则表达式
-ROLE_PREFIX_RE           = re.compile(r'^[【\[(（<]([^】\])）>]+)[】\])）>]\s*(.+)$')
-ROLE_COLON_RE            = re.compile(r'^([^\s：:][^：:]{0,24}?)[：:]\s*(.+)$')
-STANDALONE_ROLE_COLON_RE = re.compile(r'^([^\s：:][^：:]{0,24}?)\s*[：:]$')
-STANDALONE_BRACKET_RE    = re.compile(r'^[【\[]([^】\]]{1,24})[】\]]\s*[：:]?$')
-STANDALONE_PAREN_COLON_RE = re.compile(r'^[（(]([^）)]{1,24})[）)]\s*[：:]$')
-SECTION_DASH_RE          = re.compile(r'^[-—–=~*]{1,4}\s*([^-—–=~*\s].*?[^-—–=~*\s]|[^-—–=~*\s])\s*[-—–=~*]{1,4}$')
-SECTION_NUM_RE           = re.compile(r'^[-—–=~*]{1,4}\s*\d+\s*[-—–=~*]{1,4}$')
-SECTION_KEYWORD_RE       = re.compile(
-    r'^(?:Verse(?:\s*\d+)?|Chorus(?:\s*\d+)?|Bridge|Intro|Outro|Pre-Chorus|Interlude|Hook|Solo|间奏|前奏|尾奏|副歌|主歌|过渡)$',
-    re.IGNORECASE
-)
-TITLE_BANNER_RE          = re.compile(r'^(?:《[^》]+》|[·•●]\s*[^·•●]+\s*[·•●])$')
-SPACER_RE                = re.compile(r'^[\.·•●…\-\s\xa0]+$')
-NUMERIC_TAG_RE           = re.compile(r'^(?:\d+|[IVXLCDMivxlcdm]+)$')
-
-CREDIT_PREFIX_RE = re.compile(
-    r'^(?:'
-    r'作词|作曲|编曲|词曲|词|曲|'
-    r'制作人?|监制|策划|统筹|出品人?|出品|发行|'
-    r'(?:人声|分轨|贴唱)?(?:混音|录音|母带|缩混)(?:师|棚|室|工程师)?|'
-    r'(?:封面|视频|曲绘|美术|海报)(?:制作|设计)?|'
-    r'(?:统筹|素材)?鸣谢|协力|赞助|原唱|翻唱|'
-    r'演唱|主唱|和声|配唱'
-    r')(?:（[^）]+）|\([^)]+\))?\s*[:：]'
-    r'|^(?:'
-    r'Lyricist|Composer|Arranger|Producer|Executive\s+Producer'
-    r')(?:（[^）]+）|\([^)]+\))?\s*[:：]'
-    r'|^(?:'
-    r'(?:Written|Composed|Arranged|Produced|Vocals?|Mixed|Mastered|Recorded)\s+by\b'
-    r')',
-    re.IGNORECASE
-)
-
-INSTRUMENTAL_PATTERNS = (
-    "纯音乐，请欣赏",
-    "纯音乐,请欣赏",
-    "纯音乐 请欣赏",
-    "请欣赏纯音乐",
-    "没有填词的纯音乐",
-    "此歌曲为纯音乐",
-    "暂无歌词，请欣赏纯音乐",
-    "纯音乐",
-)
-
-
-def _is_credit_text(txt: str) -> bool:
-    t = txt.strip()
-    return bool(CREDIT_PREFIX_RE.match(t))
-
 
 def _is_instrumental_text(txt: str) -> bool:
     t = txt.strip()
-    return any(k in t for k in INSTRUMENTAL_PATTERNS)
+    return any(k in t for k in INSTRUMENTAL_KEYWORDS)
 
 
-def _is_preamble_metadata(txt: str, ms: int) -> bool:
-    t = txt.strip()
+def _apply_header_tag(parsed: ParsedLyrics, tag: str, val: str) -> None:
+    """提取标准头并记入元数据"""
+    tag = tag.lower()
+    val = val.strip()
+    if tag == "ti":
+        if not parsed.title:
+            parsed.title = val
+    elif tag == "ar":
+        if not parsed.artist:
+            parsed.artist = val
+    elif tag == "al":
+        if not parsed.album:
+            parsed.album = val
+    elif tag == "by":
+        if not parsed.by:
+            parsed.by = val
+    elif tag == "offset":
+        try:
+            parsed.offset_ms = int(val)
+        except ValueError:
+            pass
+
+
+def _is_preamble_line(text: str, title: str = "", artist: str = "") -> bool:
+    """
+    判断单行是否为演职人员/歌名歌手前导行：
+    只要行内容包含 : / ：（如 Lyrics by:、词:、晴天 - 周杰伦），或者与歌曲名/歌手名重合，直接丢弃
+    """
+    t = text.strip()
     if not t or SPACER_RE.match(t):
         return True
-    if _is_credit_text(t) or _is_instrumental_text(t):
+
+    # 若是合法的独立歌手段落行（如 茶理理:），保留作为分段角色，不作前导演职员丢弃
+    m_role = ROLE_STANDALONE_RE.match(t)
+    if m_role:
+        cand = m_role.group(1).strip()
+        if not NUM_RE.match(cand) and not _is_credit_keyword(cand):
+            return False
+
+    # 包含冒号（如 Lyrics by:, 词:, 作曲: 等）
+    if ":" in t or "：" in t:
         return True
-    if TITLE_BANNER_RE.match(t):
-        return True
-    if ms == 0 and SECTION_NUM_RE.match(t):
-        return True
+
+    t_lower = t.lower()
+    title_lower = title.strip().lower()
+    artist_lower = artist.strip().lower()
+
+    # 与歌曲名或歌手名重合（例如 晴天 - 周杰伦、周杰伦 - 晴天、单行歌名或歌手名）
+    if title_lower:
+        if (
+            t_lower == title_lower
+            or t_lower.startswith(f"{title_lower} -")
+            or t_lower.startswith(f"{title_lower}-")
+            or t_lower.endswith(f"- {title_lower}")
+            or t_lower.endswith(f"-{title_lower}")
+        ):
+            return True
+
+    if artist_lower:
+        if (
+            t_lower == artist_lower
+            or t_lower.startswith(f"{artist_lower} -")
+            or t_lower.startswith(f"{artist_lower}-")
+            or t_lower.endswith(f"- {artist_lower}")
+            or t_lower.endswith(f"-{artist_lower}")
+        ):
+            return True
+
+    if title_lower and artist_lower:
+        if title_lower in t_lower and artist_lower in t_lower:
+            return True
+
+    if " - " in t:
+        if (title_lower and title_lower in t_lower) or (artist_lower and artist_lower in t_lower):
+            return True
+        if not title_lower and not artist_lower and len(t) < 60:
+            return True
+
     return False
 
 
-def _finalize_lyrics(parsed: ParsedLyrics, parse_sections: Optional[bool] = None) -> ParsedLyrics:
-    """后处理歌词：纯音乐判断、忽略开头制作名单、解析段落/分段角色名并拼合到翻译行"""
-    if not parsed.lines:
-        return parsed
+def _filter_opening_preamble(
+    lines: list[LyricLine],
+    title: str = "",
+    artist: str = "",
+) -> list[LyricLine]:
+    """
+    过滤开头的演职名单行：
+    - 仅在歌曲开头（例如时间戳 < 15000ms 或遇到第一句正式唱词前）做检查；
+    - 只要行内容包含 : / ：（如 Lyrics by:、词:、晴天 - 周杰伦），或者与歌曲名/歌手名重合，直接丢弃；
+    - 一旦遇到时间跨度出现空隙或正式行，立即终止前导检查，后面无论歌词里出现什么字眼都不再触发过滤。
+    """
+    if not lines:
+        return lines
 
-    if parse_sections is None:
-        try:
-            from core import settings
-            parse_sections = settings.get_parse_sections()
-        except Exception:
-            parse_sections = True
+    first_content_idx = 0
+    prev_ms: Optional[int] = None
+    GAP_THRESHOLD_MS = 4500
 
-    # 1. 检测纯音乐歌曲：
-    non_credit_and_non_spacer = [
-        l for l in parsed.lines
-        if l.text.strip() and not SPACER_RE.match(l.text.strip()) and not _is_credit_text(l.text)
-    ]
-    has_inst_marker = any(_is_instrumental_text(l.text) for l in parsed.lines)
-
-    if has_inst_marker:
-        if (not non_credit_and_non_spacer) or all(_is_instrumental_text(l.text) for l in non_credit_and_non_spacer):
-            parsed.is_instrumental = True
-            parsed.lines = []
-            return parsed
-    elif not non_credit_and_non_spacer:
-        parsed.is_instrumental = True
-        parsed.lines = []
-        return parsed
-
-    # 2. 正常歌曲：彻底过滤开头前奏部分所有制作名单、标题横幅与元数据占位
-    preamble_end = 0
-    for idx, l in enumerate(parsed.lines):
-        if _is_preamble_metadata(l.text, l.time_ms):
-            preamble_end = idx + 1
-        else:
+    for idx, line in enumerate(lines):
+        # 仅在歌曲开头（时间戳 < 15000ms）做检查
+        if line.time_ms >= 15000:
             break
 
-    body_lines = parsed.lines[preamble_end:]
+        # 时间跨度出现空隙，立即终止前导检查
+        if prev_ms is not None and (line.time_ms - prev_ms >= GAP_THRESHOLD_MS):
+            break
 
-    # 3. 剔除正文中任意遗留的制作名单行与纯音乐占位
-    body_lines = [
-        l for l in body_lines
-        if not _is_credit_text(l.text) and not _is_instrumental_text(l.text)
-    ]
+        # 检查是否为前导行（包含 : / ： 或与歌名/歌手重合）
+        if _is_preamble_line(line.text, title=title, artist=artist):
+            prev_ms = line.time_ms
+            first_content_idx = idx + 1
+        else:
+            # 遇到第一句正式唱词，立即终止前导检查
+            break
 
-    if not parse_sections:
-        # 未开启段落解析：保留所有非空歌词行，标记行正常显示，不做段落/角色名提取
-        parsed.lines = [l for l in body_lines if l.text.strip() and not SPACER_RE.match(l.text.strip())]
-        return parsed
+    return lines[first_content_idx:]
 
-    # 4. 开启段落解析：识别段落章节与分段角色名，隐藏标记行，将角色名提取至翻译行
-    current_sec = ""
-    current_role = ""
-    processed: list[LyricLine] = []
 
-    for line in body_lines:
-        raw_text = line.text.strip()
-        if not raw_text or SPACER_RE.match(raw_text):
-            continue
 
-        # 检查是否为段落横线标记（例如 "- 哥伦比亚/莱茵生命 -", "- 间奏 -", "— 10 —"）
-        sm = SECTION_DASH_RE.match(raw_text)
-        if sm:
-            sec_name = sm.group(1).strip()
-            # 纯数字序号（例如 "— 10 —"、"- 01 -"）不作为段落名称，仅清空上一段落
-            if NUMERIC_TAG_RE.match(sec_name):
-                current_sec = ""
-            else:
-                current_sec = sec_name
-            current_role = ""
-            # 开启段落解析后，被识别为段落的标记行不再显示
-            continue
+def parse_raw_bundle(
+    yrc_text: str = "",
+    lrc_text: str = "",
+    tlyric_text: str = "",
+    romalrc_text: str = "",
+    qrc_text: str = "",
+    title: str = "",
+    artist: str = "",
+    provider: str = "",
+    song_id: str = "",
+    is_instrumental: bool = False,
+    parse_sections: Optional[bool] = None,
+) -> ParsedLyrics:
+    """统一解析原始素材并输出干净结构化的 ParsedLyrics 对象"""
+    if is_instrumental:
+        return ParsedLyrics(
+            is_instrumental=True,
+            title=title,
+            artist=artist,
+            provider=provider,
+            song_id=song_id,
+        )
 
-        # 检查独立括号段落/角色标记（例如 "【间奏】", "[Chorus]", "【茶理理】", "[hanser]"）
-        sbm = STANDALONE_BRACKET_RE.match(raw_text)
-        if sbm:
-            inner = sbm.group(1).strip()
-            if not _is_credit_text(inner):
-                if NUMERIC_TAG_RE.match(inner):
-                    current_sec = ""
-                    current_role = ""
-                elif SECTION_KEYWORD_RE.match(inner):
-                    current_sec = inner
-                    current_role = ""
-                else:
-                    current_role = inner
-                # 标记行不显示
-                continue
+    yrc_text = (yrc_text or "").strip()
+    qrc_text = (qrc_text or "").strip()
+    lrc_text = (lrc_text or "").strip()
+    tlyric_text = (tlyric_text or "").strip()
+    romalrc_text = (romalrc_text or "").strip()
 
-        # 检查独立冒号分段角色名行（例如 "茶理理:", "hanser:", "【茶理理】:", "合:"）
-        scm = STANDALONE_ROLE_COLON_RE.match(raw_text) or STANDALONE_PAREN_COLON_RE.match(raw_text)
-        if scm:
-            cand = scm.group(1).strip()
-            cand = re.sub(r'^[【\[(（<](.*)[】\])）>]$', r'\1', cand).strip()
-            if not _is_credit_text(cand):
-                if NUMERIC_TAG_RE.match(cand):
-                    current_sec = ""
-                    current_role = ""
-                elif SECTION_KEYWORD_RE.match(cand):
-                    current_sec = cand
-                    current_role = ""
-                else:
-                    current_role = cand
-                # 标记行不显示
-                continue
+    parsed = ParsedLyrics(
+        title=title,
+        artist=artist,
+        provider=provider,
+        song_id=song_id,
+    )
 
-        # 检查独立纯数字序号或无修饰章节名（例如 "10", "间奏", "Verse 1", "Chorus"）
-        if NUMERIC_TAG_RE.match(raw_text):
-            current_sec = ""
-            current_role = ""
-            continue
+    if yrc_text:
+        parsed = parse_yrc(yrc_text, title=title, artist=artist, parse_sections=parse_sections)
+    elif qrc_text:
+        parsed = parse_qrc(qrc_text, title=title, artist=artist, parse_sections=parse_sections)
+    elif lrc_text:
+        parsed = parse_lrc(lrc_text, title=title, artist=artist, parse_sections=parse_sections)
 
-        if SECTION_KEYWORD_RE.match(raw_text):
-            current_sec = raw_text
-            current_role = ""
-            continue
+    if title and not parsed.title:
+        parsed.title = title
+    if artist and not parsed.artist:
+        parsed.artist = artist
+    parsed.provider = provider
+    parsed.song_id = song_id
 
-        # 检查行内角色名前缀（例如 "【伊芙利特】地面灼烫 沸腾填装", "茶理理: 且等我 探一遭"）
-        rm = ROLE_PREFIX_RE.match(raw_text) or ROLE_COLON_RE.match(raw_text)
-        if rm:
-            role = rm.group(1).strip()
-            role = re.sub(r'^[【\[(（<](.*)[】\])）>]$', r'\1', role).strip()
-            lyric_body = rm.group(2).strip()
+    if parsed.lines and tlyric_text:
+        _attach_translations(parsed.lines, tlyric_text)
 
-            # 排除制作名单信息 (作词/作曲/编曲等)，避免将制作者误认为角色台词
-            if _is_credit_text(role) or _is_credit_text(raw_text):
-                continue
+    if parsed.lines and romalrc_text:
+        _attach_romaji(parsed.lines, romalrc_text)
 
-            current_role = role
-            combo = f"{current_sec} · {role}" if current_sec else role
-
-            if not line.translation:
-                line.translation = combo
-
-            line.text = lyric_body
-
-            # 同步裁切逐字歌词词列表前缀
-            if line.words:
-                prefix_len = len(raw_text) - len(lyric_body)
-                accum = 0
-                cut_idx = 0
-                for idx, w in enumerate(line.words):
-                    accum += len(w.text)
-                    if accum >= prefix_len:
-                        cut_idx = idx + 1
-                        break
-                line.words = line.words[cut_idx:]
-                if line.words:
-                    line.time_ms = line.words[0].time_ms
-
-            processed.append(line)
-            continue
-
-        # 普通歌词行：继承当前段落章节与角色名，放入翻译行
-        combo = f"{current_sec} · {current_role}" if (current_sec and current_role) else (current_role or current_sec)
-        if combo and not line.translation:
-            line.translation = combo
-
-        processed.append(line)
-
-    parsed.lines = processed
     return parsed
 
 
-def parse_bundle(bundle: dict, parse_sections: Optional[bool] = None) -> ParsedLyrics:
-    """根据歌词包优先解析 YRC，若无则解析 LRC"""
-    yrc_text = (bundle.get("yrc") or "").strip()
-    lrc_text = (bundle.get("lrc") or "").strip()
-    tlyric_text = (bundle.get("tlyric") or "").strip()
-
-    if yrc_text:
-        parsed = parse_yrc(yrc_text)
-        if parsed.lines:
-            parsed = _finalize_lyrics(parsed, parse_sections=parse_sections)
-            if parsed.lines and tlyric_text:
-                _attach_translations(parsed.lines, tlyric_text)
-            return parsed
-
-    if lrc_text:
-        parsed = parse_lrc(lrc_text)
-        if parsed.lines:
-            parsed = _finalize_lyrics(parsed, parse_sections=parse_sections)
-            if parsed.lines and tlyric_text:
-                _attach_translations(parsed.lines, tlyric_text)
-            return parsed
-
-    return ParsedLyrics()
-
-
-def parse(text: str, parse_sections: Optional[bool] = None) -> ParsedLyrics:
-    """自动判断格式进行解析"""
-    if not text:
+def parse_qrc(
+    qrc_text: str,
+    title: str = "",
+    artist: str = "",
+    parse_sections: Optional[bool] = None,
+) -> ParsedLyrics:
+    """解析 QQ 音乐 QRC 逐字歌词，提取标准头元数据，过滤开头的演职名单行，提取纯净逐字歌词行"""
+    if not qrc_text:
         return ParsedLyrics()
-    text = text.strip()
-    if text.startswith("[") and re.search(r'\[\d+,\d+\]', text):
-        return _finalize_lyrics(parse_yrc(text), parse_sections=parse_sections)
-    return _finalize_lyrics(parse_lrc(text), parse_sections=parse_sections)
 
-
-def parse_yrc(yrc_text: str) -> ParsedLyrics:
-    """解析网易云官方 YRC 逐字歌词"""
+    parsed = ParsedLyrics(title=title, artist=artist)
     lines: list[LyricLine] = []
+    is_inst = False
+
+    for raw in qrc_text.splitlines():
+        raw = raw.strip()
+        if not raw or raw.startswith("[kana:") or raw.startswith("{"):
+            continue
+
+        # 提取标准头：正则匹配 ^[(ti|ar|al|by|offset):(.*)]$，直接记入元数据并跳过
+        m_head = _HEADER_RE.match(raw)
+        if m_head:
+            _apply_header_tag(parsed, m_head.group(1), m_head.group(2))
+            continue
+
+        m_ms = _QRC_MS_LINE_RE.match(raw)
+        if m_ms:
+            line_start = int(m_ms.group(1))
+            line_dur = int(m_ms.group(2))
+            body = m_ms.group(3)
+        else:
+            # 兼容时间戳行格式 [mm:ss.xx]
+            m_lrc = _LRC_TIME_RE.match(raw)
+            if not m_lrc:
+                continue
+            line_start = _lrc_time_to_ms(m_lrc.group(1), m_lrc.group(2), m_lrc.group(3))
+            line_dur = 0
+            body = raw[m_lrc.end():]
+
+        words_matches = _QRC_WORD_RE.findall(body)
+        if not words_matches:
+            clean_text = re.sub(r"\(\d+,\d+\)", "", body).strip()
+            if clean_text:
+                if _is_instrumental_text(clean_text):
+                    is_inst = True
+                    continue
+                lines.append(LyricLine(time_ms=line_start, duration_ms=line_dur, text=clean_text))
+            continue
+
+        words: list[LyricWord] = []
+        full_chars: list[str] = []
+        for w_char, w_start, w_dur in words_matches:
+            words.append(LyricWord(time_ms=int(w_start), duration_ms=int(w_dur), text=w_char))
+            full_chars.append(w_char)
+
+        line_text = "".join(full_chars).strip()
+        if not line_text:
+            continue
+
+        if _is_instrumental_text(line_text):
+            is_inst = True
+            continue
+
+        lines.append(LyricLine(
+            time_ms=line_start,
+            duration_ms=line_dur,
+            text=line_text,
+            words=words,
+        ))
+
+    lines.sort(key=lambda x: x.time_ms)
+
+    # 头部前导演职员行切片过滤
+    lines = _filter_opening_preamble(lines, title=parsed.title or title, artist=parsed.artist or artist)
+
+    parsed.lines = lines
+    parsed.has_words = any(bool(l.words) for l in lines)
+    parsed.is_instrumental = is_inst
+    return _process_sections_and_roles(parsed, parse_sections=parse_sections)
+
+
+def parse_yrc(
+    yrc_text: str,
+    title: str = "",
+    artist: str = "",
+    parse_sections: Optional[bool] = None,
+) -> ParsedLyrics:
+    """解析网易云 YRC 逐字歌词，提取标准头元数据，过滤开头的演职名单行，提取纯净歌词行"""
+    if not yrc_text:
+        return ParsedLyrics()
+
+    parsed = ParsedLyrics(title=title, artist=artist)
+    lines: list[LyricLine] = []
+    is_inst = False
 
     for raw in yrc_text.splitlines():
         raw = raw.strip()
-        if not raw:
+        if not raw or raw.startswith("{"):
             continue
 
-        # 跳过开头的 JSON 元数据行
-        if raw.startswith("{") and raw.endswith("}"):
+        # 提取标准头：正则匹配 ^[(ti|ar|al|by|offset):(.*)]$，直接记入元数据并跳过
+        m_head = _HEADER_RE.match(raw)
+        if m_head:
+            _apply_header_tag(parsed, m_head.group(1), m_head.group(2))
             continue
 
         m = _YRC_LINE_RE.match(raw)
@@ -372,23 +565,26 @@ def parse_yrc(yrc_text: str) -> ParsedLyrics:
 
         words_matches = _YRC_WORD_RE.findall(body)
         if not words_matches:
-            # 可能是没有拆词的特殊行
-            clean_text = re.sub(r'\(\d+,\d+,\d+\)', '', body).strip()
+            clean_text = re.sub(r"\(\d+,\d+,\d+\)", "", body).strip()
             if clean_text:
+                if _is_instrumental_text(clean_text):
+                    is_inst = True
+                    continue
                 lines.append(LyricLine(time_ms=line_start, duration_ms=line_dur, text=clean_text))
             continue
 
         words: list[LyricWord] = []
         full_chars: list[str] = []
         for w_start, w_dur, w_char in words_matches:
-            w_start_ms = int(w_start)
-            w_dur_ms = int(w_dur)
-            words.append(LyricWord(time_ms=w_start_ms, duration_ms=w_dur_ms, text=w_char))
+            words.append(LyricWord(time_ms=int(w_start), duration_ms=int(w_dur), text=w_char))
             full_chars.append(w_char)
 
         line_text = "".join(full_chars).strip()
-        # 过滤完全空白的行（避免界面上出现孤立的空白或特殊符号）
         if not line_text:
+            continue
+
+        if _is_instrumental_text(line_text):
+            is_inst = True
             continue
 
         lines.append(LyricLine(
@@ -399,17 +595,39 @@ def parse_yrc(yrc_text: str) -> ParsedLyrics:
         ))
 
     lines.sort(key=lambda x: x.time_ms)
-    return ParsedLyrics(lines=lines, has_words=True)
+
+    # 头部前导演职员行切片过滤
+    lines = _filter_opening_preamble(lines, title=parsed.title or title, artist=parsed.artist or artist)
+
+    parsed.lines = lines
+    parsed.has_words = True
+    parsed.is_instrumental = is_inst
+    return _process_sections_and_roles(parsed, parse_sections=parse_sections)
 
 
-def parse_lrc(lrc_text: str) -> ParsedLyrics:
-    """解析标准 LRC 歌词（兼容 [mm:ss.xx] 与 [mm:ss:xx] 变体时间戳）"""
+def parse_lrc(
+    lrc_text: str,
+    title: str = "",
+    artist: str = "",
+    parse_sections: Optional[bool] = None,
+) -> ParsedLyrics:
+    """解析标准 LRC 歌词，提取标准头元数据，过滤开头的演职名单行，提取纯净歌词行"""
+    if not lrc_text:
+        return ParsedLyrics()
+
+    parsed = ParsedLyrics(title=title, artist=artist)
     raw_list: list[tuple[int, str]] = []
+    is_inst = False
 
     for raw in lrc_text.splitlines():
         raw = raw.strip()
-        # 跳过空行及网易云演职人员元信息结构
         if not raw or raw.startswith("{"):
+            continue
+
+        # 提取标准头：正则匹配 ^[(ti|ar|al|by|offset):(.*)]$，直接记入元数据并跳过
+        m_head = _HEADER_RE.match(raw)
+        if m_head:
+            _apply_header_tag(parsed, m_head.group(1), m_head.group(2))
             continue
 
         timestamps = _LRC_TIME_RE.findall(raw)
@@ -417,8 +635,11 @@ def parse_lrc(lrc_text: str) -> ParsedLyrics:
             continue
 
         text = _LRC_TIME_RE.sub("", raw).strip()
-        # 绝不保留纯空行，防止在界面正中间显示出单独的空白或音符
         if not text:
+            continue
+
+        if _is_instrumental_text(text):
+            is_inst = True
             continue
 
         for m_str, s_str, ms_str in timestamps:
@@ -434,26 +655,92 @@ def parse_lrc(lrc_text: str) -> ParsedLyrics:
             dur = max(1000, raw_list[i + 1][0] - ms)
         lines.append(LyricLine(time_ms=ms, duration_ms=dur, text=txt))
 
-    return ParsedLyrics(lines=lines, has_words=False)
+    # 头部前导演职员行切片过滤
+    lines = _filter_opening_preamble(lines, title=parsed.title or title, artist=parsed.artist or artist)
+
+    parsed.lines = lines
+    parsed.has_words = False
+    parsed.is_instrumental = is_inst
+    return _process_sections_and_roles(parsed, parse_sections=parse_sections)
+
+
+def _process_sections_and_roles(parsed: ParsedLyrics, parse_sections: Optional[bool] = None) -> ParsedLyrics:
+    """提取规范章节段落与角色名，并保持歌词行与译文行绝对纯净"""
+    if not parsed.lines:
+        return parsed
+
+    if parse_sections is None:
+        try:
+            from core import settings
+            parse_sections = settings.get_parse_sections()
+        except Exception:
+            parse_sections = True
+
+    if not parse_sections:
+        return parsed
+
+    current_sec = ""
+    current_role = ""
+    processed: list[LyricLine] = []
+
+    for line in parsed.lines:
+        raw_text = line.text.strip()
+        if not raw_text or SPACER_RE.match(raw_text):
+            continue
+
+        # 1. 过滤任何位置出现的幕后制作人员名单行 (如 "混音工程师: 赵靖", "母带制作: xxx")
+        if _is_credit_line(raw_text):
+            continue
+
+        # 2. 独立段落章节标记行 (如 "- 间奏 -", "[Chorus]", "【副歌】")
+        sec_match = SECTION_STANDALONE_RE.match(raw_text)
+        if sec_match:
+            sec_name = (sec_match.group(1) or sec_match.group(2) or "").strip()
+            if NUM_RE.match(sec_name):
+                current_sec = ""
+            else:
+                current_sec = sec_name
+            current_role = ""
+            continue
+
+        # 3. 独立分段角色名行：严格限定只有单行 "人名: " 或 "人名：" 才解析为歌手段落 (如 "茶理理:", "【hanser】:")
+        role_match = ROLE_STANDALONE_RE.match(raw_text)
+        if role_match:
+            cand = role_match.group(1).strip()
+            # 过滤纯数字以及幕后制作人职衔
+            if not NUM_RE.match(cand) and not _is_credit_keyword(cand):
+                current_role = cand
+                continue
+            else:
+                # 遇到幕后职衔单行标记（如 "作词:", "混音:"），跳过且清除当前角色
+                current_role = ""
+                continue
+
+        # 4. 普通歌词行：继承当前段落与角色名（不将带有冒号的普通歌词误判为角色）
+        line.section = current_sec
+        line.role = current_role
+        processed.append(line)
+
+    parsed.lines = processed
+    return parsed
 
 
 def _attach_translations(lines: list[LyricLine], tlyric_text: str) -> None:
-    """智能单调时间对齐将译文附加到歌词行"""
+    """按时间对齐将真实译文合并至对应歌词行 (绝不覆盖或拼接角色名)"""
     if not lines or not tlyric_text:
         return
 
     trans_entries: list[tuple[int, str]] = []
     for raw in tlyric_text.splitlines():
         raw = raw.strip()
-        if not raw or raw.startswith("{"):
+        if not raw or raw.startswith("{") or _HEADER_RE.match(raw):
             continue
 
         ts = _LRC_TIME_RE.findall(raw)
         if not ts:
             continue
         text = _LRC_TIME_RE.sub("", raw).strip()
-        # 过滤元数据及纯无意义字符
-        if not text or any(text.startswith(k) for k in ["作词", "作曲", "编曲", "制作", "纯音乐", "//"]):
+        if not text or _is_instrumental_text(text) or text.startswith("//"):
             continue
         for m_str, s_str, ms_str in ts:
             ms = _lrc_time_to_ms(m_str, s_str, ms_str)
@@ -463,7 +750,6 @@ def _attach_translations(lines: list[LyricLine], tlyric_text: str) -> None:
     if not trans_entries:
         return
 
-    # 单调有序对齐 (允许前后 2.5 秒容差)
     trans_idx = 0
     num_trans = len(trans_entries)
 
@@ -485,8 +771,82 @@ def _attach_translations(lines: list[LyricLine], tlyric_text: str) -> None:
 
         if best_idx != -1 and best_diff <= 2500:
             trans_text = trans_entries[best_idx][1]
-            if line.translation and line.translation != trans_text:
-                line.translation = f"{line.translation} · {trans_text}"
-            else:
-                line.translation = trans_text
+            line.translation = trans_text
             trans_idx = best_idx + 1
+
+
+def _clean_romaji_line(raw: str) -> str:
+    """
+    统一规范化罗马音单行文本：
+    1. 剥离 QQ 音乐 QRC 动态逐字时间戳: (1547,223)
+    2. 剥离网易云 YRC 动态逐字时间戳: (1547,223,0)
+    3. 剥离标准分秒时间戳: [mm:ss.xxx] 与毫秒时间戳: [start,dur]
+    4. 规范化连字符、单引号及多余空白字符
+    """
+    s = re.sub(r"\(\d+,\d+(?:,\d+)?\)", "", raw)
+    s = _LRC_TIME_RE.sub("", s)
+    s = _QRC_MS_LINE_RE.sub(r"\3", s)
+    s = re.sub(r"^\[\d+,\d+\]", "", s)
+    s = re.sub(r"[ \t]+", " ", s).strip()
+    return s
+
+
+def _attach_romaji(lines: list[LyricLine], romalrc_text: str) -> None:
+    """按时间对齐将规范化后的罗马音合并至对应歌词行 (支持网易云 LRC 与 QQ 音乐 QRC/LRC 格式)"""
+    if not lines or not romalrc_text:
+        return
+
+    roma_entries: list[tuple[int, str]] = []
+    for raw in romalrc_text.splitlines():
+        raw = raw.strip()
+        if not raw or raw.startswith("{") or _HEADER_RE.match(raw):
+            continue
+        if raw.lower().startswith("[kana:") or raw.lower().startswith("[by:"):
+            continue
+
+        # 1. 尝试匹配 QRC 格式: [start_ms, dur_ms]body
+        m_qrc = _QRC_MS_LINE_RE.match(raw)
+        if m_qrc:
+            start_ms = int(m_qrc.group(1))
+            clean_text = _clean_romaji_line(raw)
+            if clean_text and not _is_instrumental_text(clean_text) and not clean_text.startswith("//"):
+                roma_entries.append((start_ms, clean_text))
+            continue
+
+        # 2. 尝试匹配标准 LRC 格式: [mm:ss.xxx]
+        ts = _LRC_TIME_RE.findall(raw)
+        if ts:
+            clean_text = _clean_romaji_line(raw)
+            if not clean_text or _is_instrumental_text(clean_text) or clean_text.startswith("//"):
+                continue
+            for m_str, s_str, ms_str in ts:
+                ms = _lrc_time_to_ms(m_str, s_str, ms_str)
+                roma_entries.append((ms, clean_text))
+
+    roma_entries.sort(key=lambda x: x[0])
+    if not roma_entries:
+        return
+
+    roma_idx = 0
+    num_roma = len(roma_entries)
+
+    for line in lines:
+        if not line.text.strip():
+            continue
+
+        best_idx = -1
+        best_diff = float("inf")
+
+        for j in range(roma_idx, num_roma):
+            t_ms, t_txt = roma_entries[j]
+            diff = abs(line.time_ms - t_ms)
+            if diff < best_diff:
+                best_diff = diff
+                best_idx = j
+            elif t_ms > line.time_ms + 3000:
+                break
+
+        if best_idx != -1 and best_diff <= 2500:
+            line.romaji = roma_entries[best_idx][1]
+            roma_idx = best_idx + 1
+

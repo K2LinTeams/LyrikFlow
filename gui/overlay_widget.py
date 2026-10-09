@@ -1,12 +1,5 @@
 """
 overlay_widget.py — 桌面悬浮歌词组件
-特性：
-  - 字体：支持自定义字体栈与回退机制
-  - 进度：基于 QTimer 驱动的时间插值与歌词进度渲染
-  - 水平滚动：长歌词随播放进度自动水平滚动居中
-  - 边缘虚化：两端采用 Alpha 渐变遮罩处理溢出文本
-  - 状态展示：首句歌词前展示专辑封面与歌曲信息卡片，纯音乐模式显示提示
-  - 交互：支持透明度调节、拖拽移动与窗口尺寸调整
 """
 from __future__ import annotations
 
@@ -45,6 +38,9 @@ class OverlayWidget(QWidget):
         self._opacity: float = settings.get_opacity()
         self._is_playing: bool = False
         self._show_translation: bool = settings.get_show_translation()
+        self._show_romaji: bool = settings.get_show_romaji()
+        self._secondary_mode: str = settings.get_secondary_mode()
+        self._parse_sections: bool = settings.get_parse_sections()
         self._show_line_progress: bool = settings.get_show_line_progress()
         self._status_text: str = "LyrikFlow"
 
@@ -52,6 +48,8 @@ class OverlayWidget(QWidget):
         self._song_title: str = ""
         self._song_artist: str = ""
         self._thumb_pixmap: Optional[QPixmap] = None
+        self._prev_thumb_pixmap: Optional[QPixmap] = None
+        self._thumb_crossfade: float = 1.0
 
         # 拖拽移动与右下角缩放状态
         self._is_dragging: bool = False
@@ -61,46 +59,43 @@ class OverlayWidget(QWidget):
         self._orig_size: Optional[QSize] = None
         self._hover_grip: bool = False
 
-        # 60FPS 本地高精度连续时间插值引擎
         self._base_ms: float = 0.0
         self._base_wall_time: float = time.monotonic()
 
-        # 换句流体弹簧动画状态 (0.0 -> 1.0)
         self._anim_progress: float = 1.0
         self._prev_main_text: str = ""
         self._prev_trans_text: str = ""
 
-        # 超长歌词自适应水平平滑滚动系统
         self._scroll_x: float = 0.0
         self._target_scroll_x: float = 0.0
 
-        # 字体排印：Zen Maru Gothic / Comfortaa + 统一退避字体栈
+        # 字体
         self._font_size = settings.get_font_size_current()
         self._font_main = self._create_round_font(self._font_size, bold=True)
         self._font_sub = self._create_round_font(settings.get_font_size_context(), bold=False)
         self._is_verbatim_song: bool = False
 
-        # 封面加载圆环进度系统 (0.0 ~ 1.0，任务点平滑推进)
+        # 封面加载动画状态 (0.0 ~ 1.0)
         self._loading_progress: float = 1.0
         self._target_loading_progress: float = 1.0
         self._loading_spinner_angle: float = 0.0
         self._cover_alpha: float = 1.0
         self._target_cover_alpha: float = 1.0
 
-        # 60FPS (16ms) 全局渲染驱动定时器
+        # 渲染定时器 (~60fps)
         self._render_timer = QTimer(self)
         self._render_timer.setInterval(16)
         self._render_timer.timeout.connect(self._on_render_tick)
         self._render_timer.start()
 
-        # 100% 纯透明无边框窗口
+        # 无边框置顶透明窗口
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
-        self.setMouseTracking(True)  # 开启全局鼠标悬停跟踪
+        self.setMouseTracking(True)
 
         geo = settings.get_overlay_geometry()
         if geo:
@@ -117,14 +112,14 @@ class OverlayWidget(QWidget):
         """设置当前歌曲信息与封面缩略图"""
         self._song_title = title.strip()
         self._song_artist = artist.strip()
+        self._prev_thumb_pixmap = None
+        self._thumb_crossfade = 1.0
         if thumb_bytes:
             img = QImage.fromData(bytes(thumb_bytes))
             if not img.isNull():
                 self._thumb_pixmap = QPixmap.fromImage(img)
                 self._cover_alpha = 1.0
                 self._target_cover_alpha = 1.0
-                self._loading_progress = 1.0
-                self._target_loading_progress = 1.0
             else:
                 self._thumb_pixmap = None
                 self._cover_alpha = 0.0
@@ -136,15 +131,28 @@ class OverlayWidget(QWidget):
         self.update()
 
     def update_hd_cover(self, hd_cover_bytes: bytes) -> None:
-        """从网易云后台替换为 300x300 超清原画专辑封面，并开启封面淡入与圆环补满"""
-        if hd_cover_bytes:
-            img = QImage.fromData(bytes(hd_cover_bytes))
-            if not img.isNull():
-                self._thumb_pixmap = QPixmap.fromImage(img)
-                self._cover_alpha = 0.0
-                self._target_cover_alpha = 1.0
-                self._target_loading_progress = 1.0
-                self.update()
+        """无缝替换为高清封面图像"""
+        if not hd_cover_bytes:
+            return
+        img = QImage.fromData(bytes(hd_cover_bytes))
+        if img.isNull():
+            return
+        new_pixmap = QPixmap.fromImage(img)
+        if self._thumb_pixmap and not self._thumb_pixmap.isNull():
+            # 已展示 SMTC 封面：保留旧图并平滑交叉渐变至高清图
+            self._prev_thumb_pixmap = self._thumb_pixmap
+            self._thumb_crossfade = 0.0
+            self._thumb_pixmap = new_pixmap
+            self._cover_alpha = 1.0
+            self._target_cover_alpha = 1.0
+        else:
+            self._prev_thumb_pixmap = None
+            self._thumb_crossfade = 1.0
+            self._thumb_pixmap = new_pixmap
+            self._cover_alpha = 0.0
+            self._target_cover_alpha = 1.0
+        self._target_loading_progress = 1.0
+        self.update()
 
     def update_display_title(self, title: str) -> None:
         """更新歌曲展示标题（如异步解析到副标题/别名）"""
@@ -162,12 +170,13 @@ class OverlayWidget(QWidget):
         self._song_artist = artist.strip()
         self.update()
 
-    def reset_loading_progress(self) -> None:
+    def reset_loading_progress(self, keep_cover: bool = False) -> None:
         """重置加载进度，开启圆环动画"""
         self._loading_progress = 0.0
         self._target_loading_progress = 0.10
-        self._cover_alpha = 0.0
-        self._target_cover_alpha = 0.0
+        if not keep_cover:
+            self._cover_alpha = 0.0
+            self._target_cover_alpha = 0.0
         self._loading_spinner_angle = 0.0
         self.update()
 
@@ -181,6 +190,8 @@ class OverlayWidget(QWidget):
             lyrics and any(bool(line.words) for line in lyrics.lines)
         )
         self._cur_index = -1
+        self._base_ms = 0.0
+        self._base_wall_time = time.monotonic()
         self._anim_progress = 1.0
         self._prev_main_text = ""
         self._prev_trans_text = ""
@@ -196,7 +207,9 @@ class OverlayWidget(QWidget):
             if self._lyrics and 0 <= self._cur_index < len(self._lyrics.lines):
                 prev_line = self._lyrics.lines[self._cur_index]
                 self._prev_main_text = prev_line.text.strip()
-                self._prev_trans_text = prev_line.translation.strip()
+                self._prev_trans_text = prev_line.get_secondary_text(
+                    self._show_translation, self._show_romaji, self._secondary_mode, self._parse_sections
+                )
             else:
                 self._prev_main_text = ""
                 self._prev_trans_text = ""
@@ -208,13 +221,15 @@ class OverlayWidget(QWidget):
             self._target_scroll_x = 0.0
 
     def set_playing(self, playing: bool) -> None:
+        if self._is_playing and not playing:
+            self._base_ms = self._get_live_elapsed_ms()
         self._is_playing = playing
         self._base_wall_time = time.monotonic()
 
     def set_status_text(self, text: str) -> None:
         self._status_text = text
 
-    # ── 获取当前 60FPS 绝对平滑连续毫秒数 ────────────────────────────────────
+    # ── 获取当前播放时间进度 (毫秒) ──────────────────────────────────────────
     def _get_live_elapsed_ms(self) -> float:
         if self._is_playing:
             return self._base_ms + (time.monotonic() - self._base_wall_time) * 1000.0
@@ -247,6 +262,15 @@ class OverlayWidget(QWidget):
         else:
             self._cover_alpha = self._target_cover_alpha
 
+        # 封面高清替换平滑交叉淡入 (Crossfade)
+        if self._thumb_crossfade < 1.0:
+            diff_cf = 1.0 - self._thumb_crossfade
+            if diff_cf > 0.01:
+                self._thumb_crossfade += diff_cf * 0.16
+            else:
+                self._thumb_crossfade = 1.0
+                self._prev_thumb_pixmap = None
+
         self._loading_spinner_angle = (self._loading_spinner_angle + 2.5) % 360.0
 
         self.update()
@@ -268,15 +292,15 @@ class OverlayWidget(QWidget):
         is_before_first_line = (
             not self._lyrics
             or self._cur_index < 0
-            or (live_ms < first_line_time and self._cur_index == 0)
+            or (live_ms < first_line_time and self._cur_index <= 0)
         )
 
         is_instrumental = bool(self._lyrics and self._lyrics.is_instrumental)
 
         if is_instrumental or (is_before_first_line and (self._song_title or self._thumb_pixmap)):
-            # ── 状态 A：纯音乐或首句前展示歌曲信息卡片 ──
+            # ── 状态 A：纯音乐或首句唱响前展示歌曲信息卡片（封面+歌名+歌手） ──
             self._render_song_intro_card(painter, w, h, is_instrumental=is_instrumental)
-        elif not self._lyrics or self._cur_index < 0 or not (0 <= self._cur_index < len(self._lyrics.lines)):
+        elif not self._lyrics or not self._lyrics.lines:
             # 待机占位
             self._draw_standby(painter, w, h)
         else:
@@ -328,25 +352,22 @@ class OverlayWidget(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(ring_rect)
 
-            # 动态进度光弧 (Smooth Progress Arc，顺时针补充至满)
-            arc_pen = QPen(QColor(120, 205, 255, int(self._opacity * 230)))  # 柔和灵动冰蓝高亮
+            arc_pen = QPen(QColor(120, 205, 255, int(self._opacity * 230)))
             arc_pen.setWidthF(2.5)
             arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(arc_pen)
 
-            # 从顶部 12 点钟（90度）顺时针延伸，并伴随微光自转动效
             start_angle = int((90.0 - self._loading_spinner_angle * 0.15) * 16.0)
             span_angle = -int(max(8.0, min(360.0, self._loading_progress * 360.0)) * 16.0)
             painter.drawArc(ring_rect, start_angle, span_angle)
 
             painter.restore()
 
-        # 封面与环境微光：平滑渐入渲染 (渐入速度比进度条满更快，两者自然呼应交织)
         if self._thumb_pixmap and self._cover_alpha > 0.01:
             painter.save()
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
-            # ── A. 底层环境彩色光晕 ──
+            # ── A. 底层环境光晕 ──
             glow_rect = cover_rect.adjusted(-6, -6, 6, 6)
             glow_pix = self._thumb_pixmap.scaled(
                 16, 16,
@@ -365,22 +386,40 @@ class OverlayWidget(QWidget):
             painter.drawPixmap(int(glow_rect.x()), int(glow_rect.y()), glow_pix)
             painter.restore()
 
-            # ── B. 主封面：高清平滑圆角 ──
+            # ── B. 主封面 ──
             path = QPainterPath()
             path.addRoundedRect(cover_rect, 14.0, 14.0)
             painter.save()
             painter.setClipPath(path)
-            painter.setOpacity(self._opacity * self._cover_alpha)
+            target_rect = QRectF(cover_rect.x(), cover_rect.y(), cover_size, cover_size).toRect()
 
-            scaled_thumb = self._thumb_pixmap.scaled(
-                int(cover_size * 2), int(cover_size * 2),
-                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            painter.drawPixmap(
-                QRectF(cover_rect.x(), cover_rect.y(), cover_size, cover_size).toRect(),
-                scaled_thumb,
-            )
+            if self._prev_thumb_pixmap and not self._prev_thumb_pixmap.isNull() and self._thumb_crossfade < 1.0:
+                # 绘制旧封面作为底层基准
+                painter.setOpacity(self._opacity * self._cover_alpha)
+                scaled_prev = self._prev_thumb_pixmap.scaled(
+                    int(cover_size * 2), int(cover_size * 2),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                painter.drawPixmap(target_rect, scaled_prev)
+
+                # 叠加新高清封面淡入
+                painter.setOpacity(self._opacity * self._cover_alpha * self._thumb_crossfade)
+                scaled_curr = self._thumb_pixmap.scaled(
+                    int(cover_size * 2), int(cover_size * 2),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                painter.drawPixmap(target_rect, scaled_curr)
+            else:
+                painter.setOpacity(self._opacity * self._cover_alpha)
+                scaled_thumb = self._thumb_pixmap.scaled(
+                    int(cover_size * 2), int(cover_size * 2),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                painter.drawPixmap(target_rect, scaled_thumb)
+
             painter.restore()
 
             painter.restore()
@@ -407,7 +446,8 @@ class OverlayWidget(QWidget):
 
     # ── 歌词展示阶段（支持边缘 Alpha 渐变遮罩）─────────────
     def _render_lyrics_with_edge_feather(self, painter: QPainter, w: int, h: int, live_ms: float) -> None:
-        current_line = self._lyrics.lines[self._cur_index]
+        idx = max(0, min(len(self._lyrics.lines) - 1, self._cur_index if self._cur_index >= 0 else 0))
+        current_line = self._lyrics.lines[idx]
         curr_text = current_line.text.strip()
         if not curr_text:
             return
@@ -418,19 +458,24 @@ class OverlayWidget(QWidget):
         # 检查是否溢出需要边缘遮罩虚化
         main_w = fm_m.horizontalAdvance(curr_text)
         view_w = w - FADE_MARGIN * 2.0
-        has_trans = bool(current_line.translation.strip() and self._show_translation)
-        trans_w = fm_s.horizontalAdvance(current_line.translation.strip()) if has_trans else 0
+        curr_sub_text = current_line.get_secondary_text(
+            self._show_translation, self._show_romaji, self._secondary_mode, self._parse_sections
+        )
+        has_trans = bool(curr_sub_text)
+        trans_w = fm_s.horizontalAdvance(curr_sub_text) if has_trans else 0
 
         prev_overflow = False
         if self._prev_main_text and self._anim_progress < 0.85:
             if fm_m.horizontalAdvance(self._prev_main_text) > view_w:
+                prev_overflow = True
+            elif self._prev_trans_text and fm_s.horizontalAdvance(self._prev_trans_text) > view_w:
                 prev_overflow = True
 
         need_feather = (main_w > view_w) or (trans_w > view_w) or (self._scroll_x > 0.5) or prev_overflow
 
         if not need_feather:
             # ── 文本未溢出：直接在主 painter 绘制 ──
-            self._paint_lyric_elements(painter, w, h, live_ms, fm_m, fm_s, current_line, curr_text)
+            self._paint_lyric_elements(painter, w, h, live_ms, fm_m, fm_s, current_line, curr_text, curr_sub_text)
             return
 
         # ── 溢出滚动路径：创建离屏缓冲区应用两端渐变遮罩 ──
@@ -446,7 +491,7 @@ class OverlayWidget(QWidget):
         lp.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         lp.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
-        self._paint_lyric_elements(lp, w, h, live_ms, fm_m, fm_s, current_line, curr_text)
+        self._paint_lyric_elements(lp, w, h, live_ms, fm_m, fm_s, current_line, curr_text, curr_sub_text)
 
         # 左右两端应用 Alpha 渐变遮罩
         lp.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
@@ -474,6 +519,7 @@ class OverlayWidget(QWidget):
         fm_s: QFontMetrics,
         current_line,
         curr_text: str,
+        curr_sub_text: str = "",
     ) -> None:
         # 缓动曲线计算
         t = self._anim_progress
@@ -504,7 +550,7 @@ class OverlayWidget(QWidget):
         self._render_line(
             painter,
             text=curr_text,
-            trans=current_line.translation.strip() if self._show_translation else "",
+            trans=curr_sub_text,
             w=w, h=h,
             fm_m=fm_m, fm_s=fm_s,
             center_y_offset=curr_float,
@@ -532,7 +578,7 @@ class OverlayWidget(QWidget):
         force_full_progress: bool = False,
         current_line_obj=None,
     ) -> None:
-        has_trans = bool(trans and self._show_translation)
+        has_trans = bool(trans)
         total_h = fm_m.height() + (fm_s.height() + 6 if has_trans else 0)
 
         base_y = (h - total_h) / 2.0 + center_y_offset
@@ -541,7 +587,7 @@ class OverlayWidget(QWidget):
         main_w = fm_m.horizontalAdvance(text)
         view_w = w - FADE_MARGIN * 2.0
 
-        # ── 1. 超长歌词自适应水平平滑滚动 (Auto-scroll Flow) ──
+        # ── 1. 水平滚动计算 ──
         if main_w > view_w:
             # 计算当前焦点在歌词文本内部的相对像素位置
             focus_offset_in_text = 0.0
@@ -609,7 +655,7 @@ class OverlayWidget(QWidget):
 
         # ── 3. 样式分支：逐字歌曲 vs 非逐字歌曲（切歌时判定，歌曲全程统一）──
         if self._is_verbatim_song:
-            # ── 模式 A：原生逐字歌词，流光扫掠染色 ──
+            # ── 模式 A：逐字歌词 ──
             painter.setFont(self._font_main)
             base_col = QColor(255, 255, 255, int(alpha * 85))
             painter.setPen(base_col)
@@ -801,6 +847,8 @@ class OverlayWidget(QWidget):
         menu.addSeparator()
         label_tr = ("✓" if self._show_translation else " ") + "  显示译文"
         act_tr = menu.addAction(label_tr)
+        label_ro = ("✓" if self._show_romaji else " ") + "  显示罗马音"
+        act_ro = menu.addAction(label_ro)
         label_sec = ("✓" if settings.get_parse_sections() else " ") + "  段落解析"
         act_sec = menu.addAction(label_sec)
         label_pb = ("✓" if self._show_line_progress else " ") + "  非逐字进度条"
@@ -811,6 +859,7 @@ class OverlayWidget(QWidget):
 
         act_full.triggered.connect(lambda: self._ctrl.switch_mode("fullscreen"))
         act_tr.triggered.connect(self._toggle_translation)
+        act_ro.triggered.connect(self._toggle_romaji)
         act_sec.triggered.connect(self._toggle_parse_sections)
         act_pb.triggered.connect(self._toggle_line_progress)
         act_set.triggered.connect(self._ctrl.open_settings)
@@ -822,11 +871,18 @@ class OverlayWidget(QWidget):
         settings.set_show_translation(self._show_translation)
         self.update()
 
+    def _toggle_romaji(self):
+        self._show_romaji = not self._show_romaji
+        settings.set_show_romaji(self._show_romaji)
+        self.update()
+
     def _toggle_parse_sections(self):
         cur = settings.get_parse_sections()
         settings.set_parse_sections(not cur)
+        self._parse_sections = not cur
         if hasattr(self._ctrl, "_reload_current_song_lyrics"):
             self._ctrl._reload_current_song_lyrics()
+        self.update()
 
     def _toggle_line_progress(self):
         self._show_line_progress = not self._show_line_progress
@@ -860,6 +916,9 @@ class OverlayWidget(QWidget):
         self._font_main = self._create_round_font(self._font_size, bold=True)
         self._font_sub = self._create_round_font(settings.get_font_size_context(), bold=False)
         self._show_translation = settings.get_show_translation()
+        self._show_romaji = settings.get_show_romaji()
+        self._secondary_mode = settings.get_secondary_mode()
+        self._parse_sections = settings.get_parse_sections()
         self._show_line_progress = settings.get_show_line_progress()
         self.update()
 
