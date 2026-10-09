@@ -299,22 +299,32 @@ def apply_pill_banner_btn(btn: QPushButton, font_css: str = ""):
 
 
 # ── MD3 规范圆润开关控件 (跑道形轨道 + 圆形滑块) ──────────────────────────────
+def _lerp_color(c1: QColor, c2: QColor, t: float) -> QColor:
+    t = max(0.0, min(1.0, float(t)))
+    r = int(c1.red() + (c2.red() - c1.red()) * t)
+    g = int(c1.green() + (c2.green() - c1.green()) * t)
+    b = int(c1.blue() + (c2.blue() - c1.blue()) * t)
+    return QColor(r, g, b)
+
+
+# ── MD3 规范圆润开关控件 (跑道形轨道 + 圆形滑块) ──────────────────────────────
 class MD3Switch(QAbstractButton):
     """
     Material Design 3 原生风格胶囊开关
     - 开启：高对比度 Google 蓝 (#0B57D0) 轨道 + 纯白圆形滑块
     - 关闭：柔和浅灰蓝 (#E1E6EE) 轨道 + 深灰蓝 (#535F70) 圆形滑块
-    - 平滑缓动动画
+    - 联动平滑缓动动画与渐变色插值，避免残影与点击不同步
     """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setCheckable(True)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setFixedSize(50, 28)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._thumb_pos = 1.0 if self.isChecked() else 0.0
         self._anim = QPropertyAnimation(self, b"thumb_pos", self)
         self._anim.setDuration(160)
         self._anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self.toggled.connect(self._on_toggled)
 
     def sizeHint(self) -> QSize:
         return QSize(50, 28)
@@ -326,19 +336,31 @@ class MD3Switch(QAbstractButton):
     @thumb_pos.setter
     def thumb_pos(self, pos: float):
         self._thumb_pos = pos
-        self.update()
+        if self.parentWidget():
+            self.parentWidget().update(self.geometry())
+        else:
+            self.update()
 
     def setChecked(self, checked: bool):
         super().setChecked(checked)
         self._thumb_pos = 1.0 if checked else 0.0
-        self.update()
+        if self.parentWidget():
+            self.parentWidget().update(self.geometry())
+        else:
+            self.update()
 
-    def checkStateSet(self):
-        super().checkStateSet()
-        self._anim.stop()
-        self._anim.setStartValue(self._thumb_pos)
-        self._anim.setEndValue(1.0 if self.isChecked() else 0.0)
-        self._anim.start()
+    def _on_toggled(self, checked: bool):
+        if self.isVisible():
+            self._anim.stop()
+            self._anim.setStartValue(self._thumb_pos)
+            self._anim.setEndValue(1.0 if checked else 0.0)
+            self._anim.start()
+        else:
+            self._thumb_pos = 1.0 if checked else 0.0
+            if self.parentWidget():
+                self.parentWidget().update(self.geometry())
+            else:
+                self.update()
 
     def paintEvent(self, _):
         painter = QPainter(self)
@@ -352,15 +374,11 @@ class MD3Switch(QAbstractButton):
         y_offset = (h - track_h) / 2.0
         track_rect = QRectF(x_offset, y_offset, track_w, track_h)
 
+        t = self._thumb_pos
         if self.isEnabled():
-            if self.isChecked():
-                track_color = QColor("#0B57D0")
-                thumb_color = QColor("#FFFFFF")
-                border_color = QColor("#0B57D0")
-            else:
-                track_color = QColor("#E3E8F0")
-                thumb_color = QColor("#5A6A80")
-                border_color = QColor("#C4D0E3")
+            track_color = _lerp_color(QColor("#E3E8F0"), QColor("#0B57D0"), t)
+            thumb_color = _lerp_color(QColor("#5A6A80"), QColor("#FFFFFF"), t)
+            border_color = _lerp_color(QColor("#C4D0E3"), QColor("#0B57D0"), t)
         else:
             track_color = QColor("#EDF0F5")
             thumb_color = QColor("#B5BCC8")
@@ -371,10 +389,10 @@ class MD3Switch(QAbstractButton):
         painter.setBrush(track_color)
         painter.drawRoundedRect(track_rect, 12.0, 12.0)
 
-        # 圆形滑块插值位置
+        # 圆形滑块插值位置 (0.0 -> 左侧，1.0 -> 右侧)
         start_x = track_rect.left() + 2.5
         end_x = track_rect.right() - 21.5
-        cur_x = start_x + (end_x - start_x) * self._thumb_pos
+        cur_x = start_x + (end_x - start_x) * t
         cur_y = track_rect.top() + 2.5
         thumb_rect = QRectF(cur_x, cur_y, 19.0, 19.0)
 
