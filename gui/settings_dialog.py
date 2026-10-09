@@ -1287,7 +1287,7 @@ class SettingsDialog(QDialog):
 
         sl.addWidget(QLabel("监听应用", styleSheet="font-size: 14px; font-weight: 600; color: #1B1F24;"))
         sl.addWidget(
-            QLabel("指定要监听的音乐软件进程（留空表示监听全部应用）：",
+            QLabel("指定监听的音乐进程（留空监听全部）：",
                    styleSheet="font-size: 11px; color: #6E7781;")
         )
 
@@ -1329,7 +1329,7 @@ class SettingsDialog(QDialog):
 
         syncl.addWidget(QLabel("歌词同步与时间微调", styleSheet="font-size: 14px; font-weight: 600; color: #1B1F24;"))
         syncl.addWidget(
-            QLabel("时间单位：毫秒 ms（正值提前，负值延后）。可为当前播放的歌曲单独设定专属偏移，未单独设置的歌曲将使用全局默认偏移。",
+            QLabel("单位：毫秒（正值提前，负值延后）",
                    styleSheet="font-size: 11px; color: #6E7781;")
         )
 
@@ -1358,7 +1358,7 @@ class SettingsDialog(QDialog):
             v_song_meta.addWidget(lbl_song_name)
 
             row_chk_badge = QHBoxLayout()
-            self._chk_song_custom = QCheckBox("为此歌曲设置专属独立偏移量")
+            self._chk_song_custom = QCheckBox("为此歌曲单独设置偏移")
             self._chk_song_custom.setStyleSheet("font-size: 12px; font-weight: 600; color: #1B1F24;")
             row_chk_badge.addWidget(self._chk_song_custom)
             row_chk_badge.addSpacing(10)
@@ -1394,11 +1394,17 @@ class SettingsDialog(QDialog):
             row_song_spin.addWidget(self._spin_song_off)
             row_song_spin.addSpacing(6)
 
+            def _adjust_song_offset(delta: int):
+                if delta == 0:
+                    self._spin_song_off.setValue(0)
+                else:
+                    self._spin_song_off.setValue(self._spin_song_off.value() + delta)
+
             self._song_chip_buttons = []
-            for off, txt in [(-1000, "-1.0s"), (-500, "-0.5s"), (-100, "-0.1s"), (0, "0s"), (100, "+0.1s"), (500, "+0.5s"), (1000, "+1.0s")]:
+            for off, txt in [(-500, "-0.5s"), (-100, "-0.1s"), (0, "0s"), (100, "+0.1s"), (500, "+0.5s")]:
                 btn = QPushButton(txt)
                 apply_chip(btn)
-                btn.clicked.connect(lambda _, o=off: self._spin_song_off.setValue(o))
+                btn.clicked.connect(lambda _, o=off: _adjust_song_offset(o))
                 row_song_spin.addWidget(btn)
                 self._song_chip_buttons.append(btn)
 
@@ -1421,14 +1427,14 @@ class SettingsDialog(QDialog):
             self._spin_song_off = None
             self._lbl_live_offset_badge = None
             self._song_chip_buttons = []
-            lbl_no_song = QLabel("当前未检测到正在播放的歌曲。\n在音乐播放过程中打开设置，可在此直接针对当前歌曲微调并保存单独偏移量。")
+            lbl_no_song = QLabel("当前未检测到播放中的歌曲。播放时可在此单独微调。")
             lbl_no_song.setStyleSheet("font-size: 12px; color: #6E7781; line-height: 1.4;")
             csl.addWidget(lbl_no_song)
 
         syncl.addWidget(card_cur_song)
 
         # ── 子区块 2：全局默认歌词延迟微调 ────────────────────────────────────
-        syncl.addWidget(QLabel("全局默认偏移（未单独设置的歌曲将使用此项）：", styleSheet="font-size: 13px; font-weight: 600; color: #1B1F24;"))
+        syncl.addWidget(QLabel("全局默认偏移：", styleSheet="font-size: 13px; font-weight: 600; color: #1B1F24;"))
         row_global_spin = QHBoxLayout()
         self._spin_off = QSpinBox()
         self._spin_off.setRange(-30000, 30000)
@@ -1438,10 +1444,16 @@ class SettingsDialog(QDialog):
         row_global_spin.addWidget(self._spin_off)
         row_global_spin.addSpacing(6)
 
-        for off, txt in [(-1000, "-1.0s"), (-500, "-0.5s"), (-100, "-0.1s"), (0, "0s"), (100, "+0.1s"), (500, "+0.5s"), (1000, "+1.0s")]:
+        def _adjust_global_offset(delta: int):
+            if delta == 0:
+                self._spin_off.setValue(0)
+            else:
+                self._spin_off.setValue(self._spin_off.value() + delta)
+
+        for off, txt in [(-500, "-0.5s"), (-100, "-0.1s"), (0, "0s"), (100, "+0.1s"), (500, "+0.5s")]:
             btn = QPushButton(txt)
             apply_chip(btn)
-            btn.clicked.connect(lambda _, o=off: self._spin_off.setValue(o))
+            btn.clicked.connect(lambda _, o=off: _adjust_global_offset(o))
             row_global_spin.addWidget(btn)
 
         row_global_spin.addStretch()
