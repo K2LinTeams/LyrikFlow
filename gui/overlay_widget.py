@@ -801,6 +801,8 @@ class OverlayWidget(QWidget):
         menu.addSeparator()
         label_tr = ("✓" if self._show_translation else " ") + "  显示译文"
         act_tr = menu.addAction(label_tr)
+        label_sec = ("✓" if settings.get_parse_sections() else " ") + "  段落解析"
+        act_sec = menu.addAction(label_sec)
         label_pb = ("✓" if self._show_line_progress else " ") + "  非逐字进度条"
         act_pb = menu.addAction(label_pb)
         menu.addSeparator()
@@ -809,6 +811,7 @@ class OverlayWidget(QWidget):
 
         act_full.triggered.connect(lambda: self._ctrl.switch_mode("fullscreen"))
         act_tr.triggered.connect(self._toggle_translation)
+        act_sec.triggered.connect(self._toggle_parse_sections)
         act_pb.triggered.connect(self._toggle_line_progress)
         act_set.triggered.connect(self._ctrl.open_settings)
         act_quit.triggered.connect(QApplication.quit)
@@ -818,6 +821,12 @@ class OverlayWidget(QWidget):
         self._show_translation = not self._show_translation
         settings.set_show_translation(self._show_translation)
         self.update()
+
+    def _toggle_parse_sections(self):
+        cur = settings.get_parse_sections()
+        settings.set_parse_sections(not cur)
+        if hasattr(self._ctrl, "_reload_current_song_lyrics"):
+            self._ctrl._reload_current_song_lyrics()
 
     def _toggle_line_progress(self):
         self._show_line_progress = not self._show_line_progress

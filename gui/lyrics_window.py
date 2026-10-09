@@ -197,6 +197,10 @@ class LyricsWindow(QObject):
         self._current_artist = artist
         self._cur_index      = -1
 
+        # 切歌默认同步为正在播放状态
+        self._overlay.set_playing(True)
+        self._fullscreen.set_playing(True)
+
         # 1. 优先尝试从本地 SQLite 数据库秒级载入缓存（0 毫秒零感知延迟）
         cached = db_cache.get_song_cache(title, artist)
         if cached and (cached.get("yrc") or cached.get("lrc")):
@@ -324,8 +328,24 @@ class LyricsWindow(QObject):
             self.smtc.WATCHED_APPS = settings.get_watched_apps()
             self._overlay.reload_settings()
             self._fullscreen.reload_settings()
+            self._reload_current_song_lyrics()
         else:
             self._overlay.set_live_opacity(initial_opacity)
+
+    def _reload_current_song_lyrics(self) -> None:
+        """设置更新后重新解析当前歌曲歌词并即时推送到界面"""
+        if not self._current_title:
+            return
+        cached = db_cache.get_song_cache(self._current_title, self._current_artist)
+        if cached and (cached.get("yrc") or cached.get("lrc")):
+            self._lyrics = lyrics_parser.parse_bundle(cached)
+            self._push_lyrics_to_ui()
+            current_ms = int(self._overlay._get_live_elapsed_ms())
+            if self._lyrics:
+                idx = self._lyrics.get_line_index(current_ms)
+                self._cur_index = idx
+                self._overlay.set_current_time(current_ms, idx)
+                self._fullscreen.set_current_time(current_ms, idx)
 
     # ── 系统托盘 ─────────────────────────────────────────────────────────────
     def _setup_tray(self) -> QSystemTrayIcon:

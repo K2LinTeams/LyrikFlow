@@ -1065,6 +1065,26 @@ class SettingsDialog(QDialog):
         prog_l.addWidget(self._switch_progress)
         l.addWidget(card_prog)
 
+        # 5. 功能开关卡片：段落解析
+        card_sec = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
+        sec_l = QHBoxLayout(card_sec)
+        sec_l.setContentsMargins(18, 14, 18, 14)
+
+        sec_v = QVBoxLayout()
+        sec_v.setSpacing(2)
+        lbl_sec_t = QLabel("歌词段落解析")
+        lbl_sec_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
+        lbl_sec_d = QLabel("识别段落章节与分段角色名，隐藏标记行并将角色同步至翻译行")
+        lbl_sec_d.setStyleSheet("font-size: 11px; color: #6E7781;")
+        sec_v.addWidget(lbl_sec_t)
+        sec_v.addWidget(lbl_sec_d)
+        sec_l.addLayout(sec_v, 1)
+
+        self._switch_sections = MD3Switch()
+        self._switch_sections.setChecked(settings.get_parse_sections())
+        sec_l.addWidget(self._switch_sections)
+        l.addWidget(card_sec)
+
         # 4. 全屏歌词上下文数量卡片
         card_fs = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
         fs_l = QHBoxLayout(card_fs)
@@ -1204,6 +1224,7 @@ class SettingsDialog(QDialog):
         self._spin_ctx.setValue(14)
         self._switch_trans.setChecked(True)
         self._switch_progress.setChecked(True)
+        self._switch_sections.setChecked(True)
         self._spin_fs_lines.setValue(5)
         self._apps_edit.setText("cloudmusic.exe")
         self._spin_off.setValue(0)
@@ -1223,6 +1244,7 @@ class SettingsDialog(QDialog):
         settings.set_watched_apps(apps)
         settings.set_show_translation(self._switch_trans.isChecked())
         settings.set_show_line_progress(self._switch_progress.isChecked())
+        settings.set_parse_sections(self._switch_sections.isChecked())
         settings.set_font_size_current(self._spin_cur.value())
         settings.set_font_size_context(self._spin_ctx.value())
         settings.set_opacity(self._slider_op.value() / 100.0)

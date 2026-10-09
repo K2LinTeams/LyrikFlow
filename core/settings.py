@@ -45,6 +45,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "show_translation": True,
         "show_line_progress": True,
         "offset_ms": 0,
+        "parse_sections": True,
     },
     "fullscreen": {
         "context_lines": 5,
@@ -131,6 +132,13 @@ def _migrate_from_qsettings(cfg: dict[str, Any]) -> dict[str, Any]:
                 cfg["lyrics"]["offset_ms"] = int(s.value("lyrics/offset_ms"))
             except Exception:
                 pass
+
+        if "lyrics/parse_sections" in keys:
+            raw_ps = s.value("lyrics/parse_sections")
+            if isinstance(raw_ps, str):
+                cfg["lyrics"]["parse_sections"] = raw_ps.lower() in ("true", "1")
+            else:
+                cfg["lyrics"]["parse_sections"] = bool(raw_ps)
 
         # 全屏上下文
         if "fullscreen/context_lines" in keys:
@@ -250,6 +258,10 @@ def get_show_line_progress() -> bool:
     """无逐字歌词时是否在当前行下方显示单句进度条"""
     return bool(_get(["lyrics", "show_line_progress"], True))
 
+def get_parse_sections() -> bool:
+    """是否开启段落解析（隐藏章节与角色标记行，将角色名提取至翻译行）"""
+    return bool(_get(["lyrics", "parse_sections"], True))
+
 def get_watched_apps() -> list[str]:
     val = _get(["smtc", "watched_apps"], ["cloudmusic.exe"])
     if isinstance(val, list):
@@ -311,6 +323,9 @@ def set_show_translation(v: bool) -> None:
 
 def set_show_line_progress(v: bool) -> None:
     _set(["lyrics", "show_line_progress"], bool(v))
+
+def set_parse_sections(v: bool) -> None:
+    _set(["lyrics", "parse_sections"], bool(v))
 
 def set_watched_apps(apps: list[str]) -> None:
     _set(["smtc", "watched_apps"], [str(a).strip() for a in apps if str(a).strip()])
