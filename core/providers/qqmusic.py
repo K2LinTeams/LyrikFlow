@@ -60,90 +60,129 @@ class QQMusicLyricProvider(BaseLyricProvider):
                 svc = rj.get("req_1") or rj.get("music.search.SearchCgiService") or {}
                 songs = svc.get("data", {}).get("body", {}).get("song", {}).get("list", [])
                 if songs:
-                    return self._pick_best_song(songs, title, artist)
+                    ranked = self._rank_candidates(songs, title, artist)
+                    # 优先挑选：按相关度从高到低探测，如果最高候选本身没有歌词，则顺位回退到同曲目的其他候选
+                    for cand_song in ranked[:3]:
+                        item = self._parse_song_item(cand_song)
+                        lyr = self.get_lyrics(item)
+                        if lyr and (lyr.qrc or lyr.lrc):
+                            return item
+                    # 如果前几个候选都没有歌词，返回第一候选
+                    return self._parse_song_item(ranked[0])
         except Exception:
             pass
         return None
 
-    def _pick_best_song(self, songs: list[dict], title: str, artist: str) -> Optional[SearchSongItem]:
+    def _rank_candidates(self, songs: list[dict], title: str, artist: str) -> list[dict]:
         import difflib
+        import unicodedata
 
-        def clean_str(s: str) -> str:
+        # 常用中日/简繁同义转换表（音乐标题高频字归一化）
+        char_map = str.maketrans({
+            '愛': '爱', '葉': '叶', '樂': '乐', '風': '风', '聲': '声',
+            '夢': '梦', '聽': '听', '戀': '恋', '時': '时', '會': '会',
+            '過': '过', '語': '语', '話': '话', '傳': '传', '說': '说',
+            '傷': '伤', '點': '点', '頭': '头', '單': '单', '雙': '双',
+            '發': '发', '開': '开', '關': '关', '電': '电', '車': '车',
+            '門': '门', '飛': '飞', '機': '机', '長': '长', '問': '问',
+            '間': '间', '見': '见', '現': '现', '變': '变', '實': '实',
+            '寫': '写', '讀': '读', '難': '难', '歡': '欢',
+            '線': '线', '結': '结', '續': '续', '編': '编', '緣': '缘',
+            '專': '专', '輯': '辑', '錄': '录', '畫': '画', '視': '视',
+        })
+
+        def normalize_str(s: str, strip_brackets: bool = True) -> str:
+            s = unicodedata.normalize('NFKC', s)
+            s = s.translate(char_map)
             s = s.lower().strip()
-            s = re.sub(r"\(.*?\)|\[.*?\]|（.*?）|【.*?】", "", s)
+            if strip_brackets:
+                s = re.sub(r"\(.*?\)|\[.*?\]|（.*?）|【.*?】", "", s)
             s = re.sub(r"[^\w\u4e00-\u9fa5]+", "", s)
             return s
 
-        t_clean = clean_str(title)
-        t_raw = title.lower().strip()
-        a_clean = clean_str(artist)
-        a_raw = artist.lower().strip()
+        # 1. 构建目标歌手池（主歌手 + 标题括号内合作歌手）
+        target_artists: set[str] = set()
+        if artist.strip():
+            for p in re.split(r"[/&,、+，]|feat\.?|with", artist.lower()):
+                p_norm = normalize_str(p.strip(), strip_brackets=False)
+                if p_norm:
+                    target_artists.add(p_norm)
 
-        best_song = None
-        best_score = -1.0
-        best_t_sim = 0.0
-        best_a_sim = 0.0
+        # 提取标题括号中的合作者（如 (鹿乃xLONxHanser)）
+        for b in re.findall(r"[\(\[（【](.*?)[\)\]）】]", title):
+            for p in re.split(r"[xX/&,、+，]|feat\.?|with", b):
+                p_norm = normalize_str(p.strip(), strip_brackets=False)
+                if len(p_norm) >= 2:
+                    target_artists.add(p_norm)
+
+        t_clean = normalize_str(title, strip_brackets=True)
+        t_raw = title.lower().strip()
+
+        scored: list[tuple[float, dict]] = []
 
         for s in songs:
             s_name = s.get("name") or s.get("title") or ""
+            c_clean = normalize_str(s_name, strip_brackets=True)
             c_raw = s_name.lower().strip()
-            c_clean = clean_str(s_name)
 
             # 1. 标题相似度
-            sim_raw = difflib.SequenceMatcher(None, t_raw, c_raw).ratio()
-            sim_clean = difflib.SequenceMatcher(None, t_clean, c_clean).ratio() if (t_clean and c_clean) else 0.0
-            t_sim = max(sim_raw, sim_clean)
-            if t_clean and c_clean:
-                if t_clean == c_clean:
-                    t_sim = 1.0
-                elif t_clean in c_clean or c_clean in t_clean:
-                    t_sim = max(t_sim, 0.85)
+            if not t_clean or not c_clean:
+                t_sim = difflib.SequenceMatcher(None, t_raw, c_raw).ratio()
+            elif t_clean == c_clean:
+                t_sim = 1.0
+            elif t_clean in c_clean or c_clean in t_clean:
+                t_sim = 0.88
+            else:
+                t_sim = max(
+                    difflib.SequenceMatcher(None, t_raw, c_raw).ratio(),
+                    difflib.SequenceMatcher(None, t_clean, c_clean).ratio(),
+                )
 
             # 2. 歌手相似度
             singers = [sg.get("name", "") for sg in s.get("singer", []) if sg.get("name")]
-            cand_artist_str = "/".join(singers)
-            ca_clean = clean_str(cand_artist_str)
-            ca_raw = cand_artist_str.lower().strip()
+            cand_artists = [normalize_str(sg, strip_brackets=False) for sg in singers if sg]
+            cand_full = "/".join(cand_artists)
 
-            if not a_clean:
+            if not target_artists:
                 a_sim = 1.0
             else:
-                best_cand_a = max(
-                    difflib.SequenceMatcher(None, a_raw, ca_raw).ratio(),
-                    difflib.SequenceMatcher(None, a_clean, ca_clean).ratio() if (a_clean and ca_clean) else 0.0,
-                )
-                if ca_clean and (a_clean in ca_clean or ca_clean in a_clean):
-                    best_cand_a = max(best_cand_a, 0.85)
-
-                for sg in singers:
-                    sg_c = clean_str(sg)
-                    sg_r = sg.lower().strip()
-                    if not sg_c:
+                hit_count = 0
+                for ta in target_artists:
+                    if not ta:
                         continue
-                    cur = max(
-                        difflib.SequenceMatcher(None, a_raw, sg_r).ratio(),
-                        difflib.SequenceMatcher(None, a_clean, sg_c).ratio(),
-                    )
-                    if a_clean == sg_c:
-                        cur = 1.0
-                    elif a_clean in sg_c or sg_c in a_clean:
-                        cur = max(cur, 0.85)
-                    if cur > best_cand_a:
-                        best_cand_a = cur
-                a_sim = best_cand_a
+                    if any(ta == ca or ta in ca or ca in ta for ca in cand_artists) or ta in cand_full:
+                        hit_count += 1
 
-            score = t_sim * 0.6 + a_sim * 0.4
-            if score > best_score:
-                best_score = score
-                best_song = s
-                best_t_sim = t_sim
-                best_a_sim = a_sim
+                if hit_count > 0:
+                    a_sim = min(1.0, 0.70 + 0.15 * hit_count)
+                    # 主歌手精准命中直接拉满
+                    a_main = normalize_str(artist, strip_brackets=False)
+                    if a_main and any(a_main == ca for ca in cand_artists):
+                        a_sim = 1.0
+                else:
+                    # 歌手未直接命中，计算模糊比例并给予大幅折扣
+                    best_cand_ratio = 0.0
+                    for ta in target_artists:
+                        for ca in cand_artists:
+                            r = difflib.SequenceMatcher(None, ta, ca).ratio()
+                            if r > best_cand_ratio:
+                                best_cand_ratio = r
+                    a_sim = best_cand_ratio * 0.45
 
-        # 相似度阈值检查：若歌名或歌手与检索目标严重不符，则判定为搜错歌，跳过该结果
-        if not best_song or best_t_sim < 0.4 or (a_clean and best_a_sim < 0.3):
-            return None
+            score = t_sim * 0.55 + a_sim * 0.45
+            if target_artists and a_sim < 0.35:
+                score *= 0.45
 
-        best = best_song
+            scored.append((score, s))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [s for _, s in scored]
+
+    def _pick_best_song(self, songs: list[dict], title: str, artist: str) -> Optional[SearchSongItem]:
+        ranked = self._rank_candidates(songs, title, artist)
+        return self._parse_song_item(ranked[0]) if ranked else None
+
+    def _parse_song_item(self, best: dict) -> SearchSongItem:
         s_id = str(best.get("id") or "")
         s_mid = str(best.get("mid") or best.get("songmid") or "")
         s_name = best.get("name") or best.get("title") or ""
@@ -181,6 +220,50 @@ class QQMusicLyricProvider(BaseLyricProvider):
             sub_name=sub_name,
             provider=self.provider_name,
         )
+
+    def search_songs(self, title: str, artist: str = "", limit: int = 15) -> list[SearchSongItem]:
+        keyword = f"{title} {artist}".strip()
+        search_body = {
+            "comm": {
+                "ct": "19",
+                "cv": "1859",
+                "uin": "0",
+            },
+            "req_1": {
+                "method": "DoSearchForQQMusicDesktop",
+                "module": "music.search.SearchCgiService",
+                "param": {
+                    "num_per_page": str(limit),
+                    "page_num": "1",
+                    "query": keyword,
+                    "search_type": 0,
+                },
+            }
+        }
+        results: list[SearchSongItem] = []
+        try:
+            resp = requests.post(
+                "https://u.y.qq.com/cgi-bin/musicu.fcg",
+                json=search_body,
+                headers=QQ_HEADERS,
+                timeout=TIMEOUT,
+            )
+            if resp.status_code == 200:
+                rj = resp.json()
+                svc = rj.get("req_1") or rj.get("music.search.SearchCgiService") or {}
+                songs = svc.get("data", {}).get("body", {}).get("song", {}).get("list", [])
+                for s in songs:
+                    item = self._parse_song_item(s)
+                    if item.song_id or item.song_mid:
+                        results.append(item)
+        except Exception:
+            pass
+
+        if not results:
+            single = self.search_song(title, artist)
+            if single:
+                results.append(single)
+        return results
 
     def get_lyrics(self, song_item: SearchSongItem) -> Optional[RawLyricResult]:
         numeric_id = song_item.song_id if song_item.song_id.isdigit() else ""

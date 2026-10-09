@@ -6,7 +6,7 @@ from __future__ import annotations
 import copy
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QSize, QRectF, pyqtProperty, QPropertyAnimation, QEasingCurve, QPoint
+from PyQt6.QtCore import Qt, QSize, QRectF, pyqtProperty, QPropertyAnimation, QEasingCurve, QPoint, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QImage, QPixmap, QPainterPath
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
@@ -17,13 +17,16 @@ from PyQt6.QtWidgets import (
 )
 
 try:
-    from core import settings, font_manager, db_cache
+    from core import settings, font_manager, db_cache, lyrics_fetcher
     from core.font_manager import FontItem
+    from core.providers.base import SearchSongItem
 except ImportError:
     import settings
     import font_manager
     import db_cache
+    import lyrics_fetcher
     from font_manager import FontItem
+    from providers.base import SearchSongItem
 
 
 # ── MD3 全局样式表构建器（蓝白系配色 + 动态注入自定义字体族名栈）─────────────
@@ -299,6 +302,63 @@ def apply_pill_banner_btn(btn: QPushButton, font_css: str = ""):
     """)
 
 
+def apply_chip_active(btn: QPushButton, font_css: str = ""):
+    if not font_css:
+        font_css = font_manager.get_font_css_family()
+    btn.setFixedHeight(28)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setStyleSheet(f"""
+        QPushButton {{
+            background-color: #0B57D0;
+            color: #FFFFFF;
+            border: 1px solid #0B57D0;
+            border-radius: 14px;
+            padding: 2px 12px;
+            font-family: {font_css};
+            font-size: 12px;
+            font-weight: 600;
+            outline: none;
+        }}
+    """)
+
+
+class SearchVersionWorker(QThread):
+    results_ready = pyqtSignal(list)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, keyword: str, provider_filter: str = "all", parent=None):
+        super().__init__(parent)
+        self.keyword = keyword
+        self.provider_filter = provider_filter
+
+    def run(self):
+        try:
+            results = lyrics_fetcher.search_all_sources(self.keyword, "", provider_filter=self.provider_filter, limit=12)
+            self.results_ready.emit(results)
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+
+class ApplyVersionWorker(QThread):
+    apply_finished = pyqtSignal(bool, str, object)
+
+    def __init__(self, title: str, artist: str, item: SearchSongItem, parent=None):
+        super().__init__(parent)
+        self.title = title
+        self.artist = artist
+        self.item = item
+
+    def run(self):
+        try:
+            parsed, cover, sub_name = lyrics_fetcher.fetch_and_apply_override(self.title, self.artist, self.item)
+            if parsed:
+                self.apply_finished.emit(True, "应用成功", parsed)
+            else:
+                self.apply_finished.emit(False, "未能获取到该版本的歌词", None)
+        except Exception as e:
+            self.apply_finished.emit(False, str(e), None)
+
+
 # ── MD3 规范圆润开关控件 (跑道形轨道 + 圆形滑块) ──────────────────────────────
 def _lerp_color(c1: QColor, c2: QColor, t: float) -> QColor:
     t = max(0.0, min(1.0, float(t)))
@@ -552,6 +612,17 @@ class SettingsDialog(QDialog):
         font_css = font_manager.get_font_css_family(self._font_items)
         self.setStyleSheet(build_dialog_stylesheet(font_css))
         self.setFont(font_manager.make_app_font(13))
+
+        # 歌词源指定与版本搜索状态
+        self._all_search_results: list[SearchSongItem] = []
+        self._all_search_kw: str = ""
+        self._displayed_search_results: list[SearchSongItem] = []
+        self._last_search_results: list[SearchSongItem] = []
+        self._active_applied_item: Optional[SearchSongItem] = None
+        self._search_worker: Optional[SearchVersionWorker] = None
+        self._apply_worker: Optional[ApplyVersionWorker] = None
+        self._override_provider_filter: str = "all"
+        self._provider_chips: dict[str, QPushButton] = {}
 
         self._build_ui()
 
@@ -1025,7 +1096,11 @@ class SettingsDialog(QDialog):
         l.setContentsMargins(0, 4, 0, 0)
         l.setSpacing(12)
 
-        # 1. 悬浮条背景不透明度卡片
+        # 1. 单曲歌词源与版本指定卡片
+        card_override = self._create_lyric_override_card()
+        l.addWidget(card_override)
+
+        # 2. 悬浮条背景不透明度卡片
         card_op = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
         ol = QVBoxLayout(card_op)
         ol.setContentsMargins(18, 14, 18, 14)
@@ -1256,8 +1331,390 @@ class SettingsDialog(QDialog):
             fs_l.addWidget(btn)
 
         l.addWidget(card_fs)
+
         l.addStretch()
         return page
+
+    def _create_lyric_override_card(self) -> QWidget:
+        card = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(18, 16, 18, 16)
+        cl.setSpacing(12)
+
+        # 1. 标题与说明
+        top_v = QVBoxLayout()
+        top_v.setSpacing(2)
+        lbl_title = QLabel("单曲歌词源与版本指定")
+        lbl_title.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
+        lbl_desc = QLabel("若歌曲存在多个版本，可以在这里手动指定一个")
+        lbl_desc.setStyleSheet("font-size: 11px; color: #6E7781;")
+        lbl_desc.setWordWrap(True)
+        top_v.addWidget(lbl_title)
+        top_v.addWidget(lbl_desc)
+        cl.addLayout(top_v)
+
+        # 2. 当前歌曲状态面板
+        card_status = MD3Card(bg="#F6F9FE", border="#C6D8F8", radius=12)
+        csl = QVBoxLayout(card_status)
+        csl.setContentsMargins(12, 10, 12, 10)
+        csl.setSpacing(6)
+
+        row_stat = QHBoxLayout()
+        row_stat.setSpacing(8)
+        lbl_track_desc = QLabel(f"当前识别歌曲：<b>{self._current_title or '（暂无播放）'}</b> {self._current_artist or ''}")
+        lbl_track_desc.setStyleSheet("font-size: 12px; color: #1B1F24;")
+        lbl_track_desc.setWordWrap(True)
+        row_stat.addWidget(lbl_track_desc, 1)
+
+        self._lbl_override_badge = QLabel()
+        row_stat.addWidget(self._lbl_override_badge)
+        csl.addLayout(row_stat)
+        cl.addWidget(card_status)
+
+        # 3. 搜索控制栏 (输入框 + 音源切换 Chip + 搜索按钮)
+        search_v = QVBoxLayout()
+        search_v.setSpacing(8)
+
+        row_search = QHBoxLayout()
+        row_search.setSpacing(8)
+        self._override_search_edit = QLineEdit()
+        self._override_search_edit.setPlaceholderText("输入歌名与歌手进行多版本检索...")
+        default_kw = f"{self._current_title} {self._current_artist}".strip()
+        self._override_search_edit.setText(default_kw)
+        self._override_search_edit.returnPressed.connect(self._do_search_override_versions)
+        row_search.addWidget(self._override_search_edit, 1)
+
+        self._btn_do_search = QPushButton("🔍 搜索版本")
+        apply_pill_banner_btn(self._btn_do_search)
+        self._btn_do_search.clicked.connect(self._do_search_override_versions)
+        row_search.addWidget(self._btn_do_search)
+        search_v.addLayout(row_search)
+
+        # 平台筛选 Chips
+        row_chips = QHBoxLayout()
+        row_chips.setSpacing(8)
+        row_chips.addWidget(QLabel("检索音源：", styleSheet="font-size: 11px; color: #6E7781;"))
+
+        self._override_provider_filter = "all"
+        self._provider_chips = {}
+        providers = [("全部音源", "all"), ("网易云音乐", "netease"), ("QQ 音乐", "qqmusic"), ("LRCLIB", "lrclib")]
+        for p_name, p_code in providers:
+            btn = QPushButton(p_name)
+            if p_code == "all":
+                apply_chip_active(btn)
+            else:
+                apply_chip(btn)
+            btn.clicked.connect(lambda _, c=p_code: self._set_override_provider(c))
+            self._provider_chips[p_code] = btn
+            row_chips.addWidget(btn)
+        row_chips.addStretch()
+        search_v.addLayout(row_chips)
+        cl.addLayout(search_v)
+
+        # 4. 搜索结果滚动展示列表
+        self._results_scroll = QScrollArea()
+        self._results_scroll.setFixedHeight(220)
+        self._results_scroll.setWidgetResizable(True)
+        self._results_scroll.setStyleSheet("""
+            QScrollArea {
+                background: #F8FAFD;
+                border: 1px solid #DCE3EE;
+                border-radius: 12px;
+            }
+        """)
+
+        self._results_container = QWidget()
+        self._results_container.setStyleSheet("background: transparent;")
+        self._results_layout = QVBoxLayout(self._results_container)
+        self._results_layout.setContentsMargins(8, 8, 8, 8)
+        self._results_layout.setSpacing(6)
+
+        self._lbl_empty_results = QLabel("点击上方“搜索版本”即可拉取各平台候选歌曲列表供您指定选择")
+        self._lbl_empty_results.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_empty_results.setStyleSheet("font-size: 12px; color: #8C939E; padding: 20px 0;")
+        self._results_layout.addWidget(self._lbl_empty_results)
+        self._results_layout.addStretch()
+
+        self._results_scroll.setWidget(self._results_container)
+        cl.addWidget(self._results_scroll)
+
+        # 初始刷新状态 Badge
+        self._refresh_override_status_badge()
+        return card
+
+    def _set_override_provider(self, p_code: str):
+        if self._override_provider_filter == p_code and self._displayed_search_results:
+            return
+        self._override_provider_filter = p_code
+        for code, btn in self._provider_chips.items():
+            if code == p_code:
+                apply_chip_active(btn)
+            else:
+                apply_chip(btn)
+
+        kw = self._override_search_edit.text().strip()
+        # 如果已经执行了所有音源搜索且搜索词一致，直接在本地内存秒级筛选
+        if self._all_search_results and kw == self._all_search_kw:
+            if p_code == "all":
+                filtered = list(self._all_search_results)
+            else:
+                filtered = [it for it in self._all_search_results if it.provider.lower() == p_code.lower()]
+            self._displayed_search_results = filtered
+            self._render_search_results(filtered)
+
+    def _get_current_lyric_info(self) -> tuple[str, str, str]:
+        """获取当前生效歌词的提供源代码、提供源显示名与类型 ('netease', '网易云', '标准')"""
+        parsed = None
+        prov = ""
+
+        # 1. 强优先：若刚刚手动指定了版本，直接使用所选 item 与解析结果
+        if getattr(self, "_active_applied_item", None):
+            prov = self._active_applied_item.provider
+            parsed = getattr(self, "_active_applied_parsed", None)
+
+        # 2. 从本地 SQLite 缓存中获取最新持久化歌词
+        if not parsed and self._current_title:
+            cached = db_cache.get_song_cache(self._current_title, self._current_artist)
+            if cached:
+                parsed = cached.get("parsed")
+                if not prov:
+                    prov = cached.get("provider") or (parsed.provider if parsed else "")
+
+        # 3. 兜底从 controller 内存中获取当前实时 lyrics
+        if not parsed and self._controller and hasattr(self._controller, "_lyrics") and self._controller._lyrics:
+            ctrl_l = self._controller._lyrics
+            parsed = ctrl_l
+            if not prov:
+                prov = ctrl_l.provider
+
+        prov_clean = (prov or "").lower().strip()
+        prov_map = {
+            "netease": "网易云",
+            "qqmusic": "QQ音乐",
+            "lrclib": "LRCLIB",
+        }
+        prov_name = prov_map.get(prov_clean, prov or "未知源")
+
+        if parsed:
+            if parsed.is_instrumental:
+                lyric_type = "纯音乐"
+            elif parsed.has_words or any(bool(l.words) for l in parsed.lines):
+                lyric_type = "动态"
+            elif parsed.lines:
+                lyric_type = "标准"
+            else:
+                lyric_type = "无歌词"
+        else:
+            lyric_type = "标准" if prov else "未获取"
+
+        return prov_clean, prov_name, lyric_type
+
+    def _refresh_override_status_badge(self):
+        if not self._current_title:
+            self._lbl_override_badge.setText("无正在播放歌曲")
+            self._lbl_override_badge.setStyleSheet("background: #F1F3F4; color: #5F6368; border-radius: 6px; padding: 2px 8px; font-size: 11px;")
+            return
+
+        prov_code, prov_name, lyric_type = self._get_current_lyric_info()
+        self._lbl_override_badge.setText(f"{prov_name} - {lyric_type}")
+
+        if prov_code == "netease":
+            self._lbl_override_badge.setStyleSheet("background: #FCE8E6; color: #C5221F; border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: bold;")
+        elif prov_code == "qqmusic":
+            self._lbl_override_badge.setStyleSheet("background: #E6F4EA; color: #137333; border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: bold;")
+        elif prov_code == "lrclib":
+            self._lbl_override_badge.setStyleSheet("background: #EEF2F6; color: #3E4C59; border: 1px solid #CFD8DC; border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: bold;")
+        else:
+            self._lbl_override_badge.setStyleSheet("background: #F1F3F4; color: #5F6368; border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: bold;")
+
+    def _do_search_override_versions(self):
+        kw = self._override_search_edit.text().strip()
+        if not kw:
+            return
+
+        self._btn_do_search.setText("检索中...")
+        self._btn_do_search.setEnabled(False)
+
+        # 清空现有结果并显示加载提示
+        while self._results_layout.count() > 0:
+            it = self._results_layout.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+
+        lbl_loading = QLabel("正在从各平台检索候选版本列表，请稍候...")
+        lbl_loading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_loading.setStyleSheet("font-size: 12px; color: #0B57D0; padding: 20px 0;")
+        self._results_layout.addWidget(lbl_loading)
+        self._results_layout.addStretch()
+
+        self._search_worker = SearchVersionWorker(kw, self._override_provider_filter, self)
+
+        def on_results(items):
+            self._btn_do_search.setText("🔍 搜索版本")
+            self._btn_do_search.setEnabled(True)
+            self._last_search_results = items
+            if self._override_provider_filter == "all":
+                self._all_search_results = list(items)
+                self._all_search_kw = kw
+                self._displayed_search_results = list(items)
+            else:
+                self._displayed_search_results = list(items)
+            self._render_search_results(self._displayed_search_results)
+
+        def on_err(err_msg):
+            self._btn_do_search.setText("🔍 搜索版本")
+            self._btn_do_search.setEnabled(True)
+            while self._results_layout.count() > 0:
+                it = self._results_layout.takeAt(0)
+                if it.widget():
+                    it.widget().deleteLater()
+            lbl_err = QLabel(f"检索失败: {err_msg}")
+            lbl_err.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl_err.setStyleSheet("font-size: 12px; color: #B3261E; padding: 20px 0;")
+            self._results_layout.addWidget(lbl_err)
+            self._results_layout.addStretch()
+
+        self._search_worker.results_ready.connect(on_results)
+        self._search_worker.error_occurred.connect(on_err)
+        self._search_worker.start()
+
+    def _render_search_results(self, items: list[SearchSongItem]):
+        while self._results_layout.count() > 0:
+            it = self._results_layout.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+
+        if not items:
+            if self._override_provider_filter != "all" and self._all_search_results:
+                lbl = QLabel("当前筛选分类下无匹配的歌曲版本，可点击“全部音源”查看")
+            else:
+                lbl = QLabel("未找到匹配的歌曲版本，请尝试更改搜索词或音源平台")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("font-size: 12px; color: #8C939E; padding: 20px 0;")
+            self._results_layout.addWidget(lbl)
+            self._results_layout.addStretch()
+            return
+
+        cached = db_cache.get_song_cache(self._current_title, self._current_artist) if self._current_title else None
+        active_song_id = str(cached.get("song_id", "")) if cached else ""
+        active_prov = str(cached.get("provider", "")).lower() if cached else ""
+        if not active_song_id and self._controller and hasattr(self._controller, "_lyrics") and self._controller._lyrics:
+            active_song_id = str(self._controller._lyrics.song_id or "")
+            active_prov = str(self._controller._lyrics.provider or "").lower()
+
+        for item in items:
+            item_card = QFrame()
+            is_match_applied = bool(
+                self._active_applied_item and
+                self._active_applied_item.provider.lower() == item.provider.lower() and
+                (
+                    str(item.song_id) == str(self._active_applied_item.song_id) or
+                    (item.song_mid and item.song_mid == getattr(self._active_applied_item, "song_mid", "")) or
+                    (item.title == self._active_applied_item.title and item.artist == self._active_applied_item.artist)
+                )
+            )
+            is_current = is_match_applied or bool(
+                active_prov and item.provider.lower() == active_prov and
+                (
+                    (active_song_id and str(item.song_id) == active_song_id) or
+                    (active_song_id and getattr(item, "song_mid", "") and str(item.song_mid) == active_song_id)
+                )
+            )
+            border_color = "#0B57D0" if is_current else "#E1E8F5"
+            bg_color = "#EFF6FF" if is_current else "#FFFFFF"
+            item_card.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {bg_color};
+                    border: 1px solid {border_color};
+                    border-radius: 10px;
+                }}
+            """)
+            row = QHBoxLayout(item_card)
+            row.setContentsMargins(10, 8, 10, 8)
+            row.setSpacing(10)
+
+            # 音源徽标
+            prov_badge = QLabel()
+            if item.provider == "netease":
+                prov_badge.setText("网易云")
+                prov_badge.setStyleSheet("background: #FCE8E6; color: #C5221F; border-radius: 6px; padding: 2px 6px; font-size: 11px; font-weight: bold;")
+            elif item.provider == "qqmusic":
+                prov_badge.setText("QQ音乐")
+                prov_badge.setStyleSheet("background: #E6F4EA; color: #137333; border-radius: 6px; padding: 2px 6px; font-size: 11px; font-weight: bold;")
+            else:
+                prov_badge.setText("LRCLIB")
+                prov_badge.setStyleSheet("background: #F1F3F4; color: #5F6368; border-radius: 6px; padding: 2px 6px; font-size: 11px; font-weight: bold;")
+            row.addWidget(prov_badge)
+
+            # 歌名与歌手信息
+            v_info = QVBoxLayout()
+            v_info.setSpacing(2)
+            title_text = item.title
+            if item.sub_name:
+                title_text += f" ({item.sub_name})"
+            lbl_title = QLabel(title_text)
+            lbl_title.setStyleSheet("font-size: 12px; font-weight: 700; color: #1B1F24;")
+            lbl_title.setWordWrap(True)
+
+            artist_album = item.artist
+            if item.album:
+                artist_album += f" · 《{item.album}》"
+            lbl_meta = QLabel(artist_album)
+            lbl_meta.setStyleSheet("font-size: 11px; color: #6E7781;")
+            lbl_meta.setWordWrap(True)
+
+            v_info.addWidget(lbl_title)
+            v_info.addWidget(lbl_meta)
+            row.addLayout(v_info, 1)
+
+            # 操作按钮
+            if is_current:
+                btn_used = QPushButton("当前已选 ✓")
+                btn_used.setEnabled(False)
+                btn_used.setFixedHeight(28)
+                btn_used.setStyleSheet("background: #E8F0FE; color: #1967D2; border-radius: 14px; padding: 2px 10px; font-size: 11px; font-weight: bold;")
+                row.addWidget(btn_used)
+            else:
+                btn_apply = QPushButton("选用此版本")
+                apply_chip(btn_apply)
+                btn_apply.clicked.connect(lambda _, it=item, b=btn_apply: self._on_apply_song_item_clicked(it, b))
+                row.addWidget(btn_apply)
+
+            self._results_layout.addWidget(item_card)
+
+        self._results_layout.addStretch()
+
+    def _on_apply_song_item_clicked(self, item: SearchSongItem, btn: QPushButton):
+        btn.setText("应用中...")
+        btn.setEnabled(False)
+
+        track_title = self._current_title or item.title
+        track_artist = self._current_artist or item.artist
+
+        self._apply_worker = ApplyVersionWorker(track_title, track_artist, item, self)
+
+        def on_done(ok, msg, parsed_obj):
+            if ok:
+                self._active_applied_item = item
+                self._active_applied_parsed = parsed_obj
+                # 1. 立即通知 controller 重新解析并推送到桌面悬浮窗和全屏
+                if self._controller and hasattr(self._controller, "_reload_current_song_lyrics"):
+                    self._controller._reload_current_song_lyrics()
+                # 2. 刷新设置面板顶部徽标（提供源 - 动态/标准）
+                self._refresh_override_status_badge()
+                # 3. 刷新列表项按钮（变为“当前已选 ✓”并高亮）
+                if self._displayed_search_results:
+                    self._render_search_results(self._displayed_search_results)
+                elif self._last_search_results:
+                    self._render_search_results(self._last_search_results)
+            else:
+                btn.setText("选用此版本")
+                btn.setEnabled(True)
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "应用失败", f"无法获取此版本的歌词：{msg}")
+
+        self._apply_worker.apply_finished.connect(on_done)
+        self._apply_worker.start()
 
     def _on_opacity_slider_changed(self, v: int):
         self._lbl_op_val.setText(f"{v}%")

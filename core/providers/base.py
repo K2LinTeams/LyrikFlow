@@ -20,6 +20,33 @@ class SearchSongItem:
     provider: str = ""                # 提供源标识 (netease, qqmusic, lrclib)
     song_mid: str = ""                # QQ 音乐专属 string mid (如 001p3V4c0PQdmd)
 
+    def to_dict(self) -> dict:
+        return {
+            "song_id": self.song_id,
+            "title": self.title,
+            "artist": self.artist,
+            "album": self.album,
+            "duration_ms": self.duration_ms,
+            "pic_url": self.pic_url,
+            "sub_name": self.sub_name,
+            "provider": self.provider,
+            "song_mid": self.song_mid,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> SearchSongItem:
+        return cls(
+            song_id=str(d.get("song_id", "")),
+            title=str(d.get("title", "")),
+            artist=str(d.get("artist", "")),
+            album=str(d.get("album", "")),
+            duration_ms=int(d.get("duration_ms", 0)),
+            pic_url=d.get("pic_url"),
+            sub_name=str(d.get("sub_name", "")),
+            provider=str(d.get("provider", "")),
+            song_mid=str(d.get("song_mid", "")),
+        )
+
 
 @dataclass
 class RawLyricResult:
@@ -47,6 +74,11 @@ class BaseLyricProvider:
     def search_song(self, title: str, artist: str) -> Optional[SearchSongItem]:
         """根据歌名和歌手搜索最匹配的歌曲"""
         raise NotImplementedError
+
+    def search_songs(self, title: str, artist: str = "", limit: int = 15) -> list[SearchSongItem]:
+        """搜索歌曲候选列表（默认调用 search_song 兜底）"""
+        item = self.search_song(title, artist)
+        return [item] if item else []
 
     def get_lyrics(self, song_item: SearchSongItem) -> Optional[RawLyricResult]:
         """根据歌曲信息获取歌词与素材"""

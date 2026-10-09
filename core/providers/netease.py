@@ -72,20 +72,7 @@ class NeteaseLyricProvider(BaseLyricProvider):
         # 回退 Web 搜索
         return self._search_web_fallback(keyword, title, artist)
 
-    def _pick_best_song(self, songs: list[dict], title: str, artist: str) -> SearchSongItem:
-        title_lower = title.lower().strip()
-        artist_lower = artist.lower().strip()
-
-        best = songs[0]
-        # 寻找完全同名且歌手匹配的歌曲
-        for s in songs:
-            s_name = (s.get("name") or "").lower().strip()
-            s_artists = [a.get("name", "").lower().strip() for a in (s.get("ar") or s.get("artists") or [])]
-            if s_name == title_lower:
-                if any(artist_lower in a or a in artist_lower for a in s_artists if a):
-                    best = s
-                    break
-
+    def _parse_song_item(self, best: dict) -> SearchSongItem:
         s_id = str(best.get("id", ""))
         s_name = best.get("name", "")
         ar_list = [a.get("name", "") for a in (best.get("ar") or best.get("artists") or []) if a.get("name")]
@@ -100,8 +87,14 @@ class NeteaseLyricProvider(BaseLyricProvider):
         alia = best.get("alia") or best.get("alias")
         if tns and isinstance(tns, list) and tns[0]:
             sub_name = str(tns[0]).strip()
+        elif isinstance(tns, str) and tns.strip():
+            sub_name = tns.strip()
+        elif best.get("transName"):
+            sub_name = str(best["transName"]).strip()
         elif alia and isinstance(alia, list) and alia[0]:
             sub_name = str(alia[0]).strip()
+        elif isinstance(alia, str) and alia.strip():
+            sub_name = alia.strip()
 
         return SearchSongItem(
             song_id=s_id,
@@ -114,6 +107,52 @@ class NeteaseLyricProvider(BaseLyricProvider):
             provider=self.provider_name,
         )
 
+    def _pick_best_song(self, songs: list[dict], title: str, artist: str) -> SearchSongItem:
+        title_lower = title.lower().strip()
+        artist_lower = artist.lower().strip()
+
+        best = songs[0]
+        # 寻找完全同名且歌手匹配的歌曲
+        for s in songs:
+            s_name = (s.get("name") or "").lower().strip()
+            s_artists = [a.get("name", "").lower().strip() for a in (s.get("ar") or s.get("artists") or [])]
+            if s_name == title_lower:
+                if any(artist_lower in a or a in artist_lower for a in s_artists if a):
+                    best = s
+                    break
+
+        return self._parse_song_item(best)
+
+    def search_songs(self, title: str, artist: str = "", limit: int = 15) -> list[SearchSongItem]:
+        keyword = f"{title} {artist}".strip()
+        url_path = "/api/cloudsearch/pc"
+        api_url = "https://interface.music.163.com/eapi/cloudsearch/pc"
+        payload = {
+            "s": keyword,
+            "type": "1",
+            "limit": str(limit),
+            "offset": "0",
+            "total": "true",
+        }
+        results: list[SearchSongItem] = []
+        try:
+            params = {"params": eapi_encrypt(url_path, payload)}
+            resp = requests.post(api_url, data=params, headers=NETEASE_HEADERS, timeout=TIMEOUT)
+            if resp.status_code == 200:
+                songs = resp.json().get("result", {}).get("songs", [])
+                for s in songs:
+                    item = self._parse_song_item(s)
+                    if item.song_id:
+                        results.append(item)
+        except Exception:
+            pass
+
+        if not results:
+            single = self.search_song(title, artist)
+            if single:
+                results.append(single)
+        return results
+
     def _get_song_by_id(self, song_id: str) -> Optional[SearchSongItem]:
         try:
             url = f"https://music.163.com/api/song/detail?ids=[{song_id}]"
@@ -124,12 +163,27 @@ class NeteaseLyricProvider(BaseLyricProvider):
                     s = songs[0]
                     ar_list = [a.get("name", "") for a in s.get("artists", []) if a.get("name")]
                     pic_url = s.get("album", {}).get("picUrl")
+                    sub_name = ""
+                    tns = s.get("transNames") or s.get("tns")
+                    alia = s.get("alias") or s.get("alia")
+                    if tns and isinstance(tns, list) and tns[0]:
+                        sub_name = str(tns[0]).strip()
+                    elif isinstance(tns, str) and tns.strip():
+                        sub_name = tns.strip()
+                    elif s.get("transName"):
+                        sub_name = str(s["transName"]).strip()
+                    elif alia and isinstance(alia, list) and alia[0]:
+                        sub_name = str(alia[0]).strip()
+                    elif isinstance(alia, str) and alia.strip():
+                        sub_name = alia.strip()
+
                     return SearchSongItem(
                         song_id=song_id,
                         title=s.get("name", ""),
                         artist="/".join(ar_list),
                         album=s.get("album", {}).get("name", ""),
                         pic_url=pic_url,
+                        sub_name=sub_name,
                         provider=self.provider_name,
                     )
         except Exception:

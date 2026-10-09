@@ -196,45 +196,19 @@ _QRC_WORD_RE = re.compile(r"([^\(\)]+)\((\d+),(\d+)\)")
 _LRC_TIME_RE = re.compile(r"\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]")
 _HEADER_RE   = re.compile(r"^\[(ti|ar|al|by|offset):(.*)\]$", re.IGNORECASE)
 
-# 规范章节与角色识别（严格限定单行 "人名: " 才作为歌手段落，避免如 "混音工程师: 赵靖" 误判）
-SECTION_STANDALONE_RE = re.compile(
-    r"^(?:[-—–=~*]{1,4}\s*(.+?)\s*[-—–=~*]{1,4}|[【\[](Chorus|Verse(?:\s*\d+)?|Bridge|Intro|Outro|Hook|Pre-Chorus|间奏|前奏|尾奏|副歌|主歌|过渡)[】\]]\s*[:：]?)$",
+# 规范章节与角色识别
+SECTION_KEYWORD_RE = re.compile(
+    r"^(?:Chorus(?:\s*\d+)?|Verse(?:\s*\d+)?|Bridge|Intro|Outro|Hook|Pre-Chorus|副歌|主歌|过渡)$",
     re.IGNORECASE,
 )
-ROLE_STANDALONE_RE = re.compile(r"^[【\[(（<]?([^\s：:【\[\]()]{1,16})[】\])）>]?\s*[:：]$")
+SECTION_DASH_RE = re.compile(r"^[-—–=~*]{1,4}\s*(.+?)\s*[-—–=~*]{1,4}$")
+STANDALONE_BRACKET_RE = re.compile(r"^[【\[(（<]([^】\])）>]{1,32})[】\])）>]\s*[:：]?$")
+STANDALONE_COLON_RE = re.compile(r"^([^\s：:【\[\]()]{1,32})\s*[:：]$")
+ROLE_INLINE_BRACKET_RE = re.compile(r"^[【\[(（<]([^】\])）>]{1,32})[】\])）>]\s*(.+)$")
 SPACER_RE          = re.compile(r"^[\.·•●…\-\s\xa0]+$")
 NUM_RE             = re.compile(r"^\d+$")
+NUMERIC_TAG_RE     = re.compile(r"^(?:\d+|[IVXLCDMivxlcdm]+)$")
 
-# 幕后演职人员岗位关键字（用于准确排除非歌手信息）
-CREDIT_KEYWORDS = (
-    "作词", "作曲", "编曲", "制作人", "制作", "监制", "企划", "统筹", "出品", "发行",
-    "录音", "混音", "母带", "吉他", "贝斯", "贝司", "鼓手", "打击乐", "键盘", "钢琴", "弦乐", "管乐",
-    "和声", "和音", "文案", "设计", "封面", "摄影", "导演", "剪辑",
-    "录音师", "混音师", "母带师", "录音棚", "录音室", "混音室", "混音棚", "母带室", "工程师",
-    "工作室", "音乐制作", "音频工程", "OP", "SP", "A&R", "Lyrics", "Lyricist", "Composer",
-    "Arranger", "Producer", "Mixing", "Mastering", "Recording", "Sound", "Studio"
-)
-
-
-def _is_credit_keyword(text: str) -> bool:
-    """判断单项名字是否为制作人员职衔（如 '混音', '制作人' 等）"""
-    t = text.strip()
-    t_clean = re.sub(r"^[【\[(（<]+|[】\])）>]+$", "", t).strip().lower()
-    return any(kw.lower() in t_clean for kw in CREDIT_KEYWORDS)
-
-
-def _is_credit_line(text: str) -> bool:
-    """判断单行是否为制作人员名单行（如 '混音工程师: 赵靖', '作词: 方文山' 等）"""
-    t = text.strip()
-    if ":" in t or "：" in t:
-        parts = re.split(r"[:：]", t, maxsplit=1)
-        prefix = parts[0].strip()
-        val = parts[1].strip() if len(parts) > 1 else ""
-        prefix_clean = re.sub(r"^[【\[(（<]+|[】\])）>]+$", "", prefix).strip().lower()
-        if any(kw.lower() in prefix_clean for kw in CREDIT_KEYWORDS):
-            if val:
-                return True
-    return False
 
 INSTRUMENTAL_KEYWORDS = (
     "纯音乐，请欣赏",
@@ -293,31 +267,16 @@ def _apply_header_tag(parsed: ParsedLyrics, tag: str, val: str) -> None:
             pass
 
 
-def _is_preamble_line(text: str, title: str = "", artist: str = "") -> bool:
-    """
-    判断单行是否为演职人员/歌名歌手前导行：
-    只要行内容包含 : / ：（如 Lyrics by:、词:、晴天 - 周杰伦），或者与歌曲名/歌手名重合，直接丢弃
-    """
+def _is_title_or_artist(text: str, title: str = "", artist: str = "") -> bool:
+    """判断单行是否为歌曲名或歌手名前导行"""
     t = text.strip()
     if not t or SPACER_RE.match(t):
-        return True
-
-    # 若是合法的独立歌手段落行（如 茶理理:），保留作为分段角色，不作前导演职员丢弃
-    m_role = ROLE_STANDALONE_RE.match(t)
-    if m_role:
-        cand = m_role.group(1).strip()
-        if not NUM_RE.match(cand) and not _is_credit_keyword(cand):
-            return False
-
-    # 包含冒号（如 Lyrics by:, 词:, 作曲: 等）
-    if ":" in t or "：" in t:
         return True
 
     t_lower = t.lower()
     title_lower = title.strip().lower()
     artist_lower = artist.strip().lower()
 
-    # 与歌曲名或歌手名重合（例如 晴天 - 周杰伦、周杰伦 - 晴天、单行歌名或歌手名）
     if title_lower:
         if (
             t_lower == title_lower
@@ -351,6 +310,49 @@ def _is_preamble_line(text: str, title: str = "", artist: str = "") -> bool:
     return False
 
 
+def _find_first_lyric_index(
+    lines: list[LyricLine],
+    title: str = "",
+    artist: str = "",
+) -> int:
+    """
+    寻找第一句正式歌词的索引：
+    定义为：从该句开始，往下连续三句都是没有冒号的句子（且不是纯歌名/歌手信息行或空行）。
+    如果歌词总行数不足 3 行，则只要往下所有行均无冒号即可。
+    """
+    if not lines:
+        return 0
+
+    n = len(lines)
+    for i in range(n):
+        cand_text = lines[i].text.strip()
+        if not cand_text or SPACER_RE.match(cand_text):
+            continue
+        if ":" in cand_text or "：" in cand_text:
+            continue
+        if _is_title_or_artist(cand_text, title=title, artist=artist):
+            continue
+
+        streak_len = min(3, n - i)
+        is_streak = True
+        for j in range(i, i + streak_len):
+            t = lines[j].text.strip()
+            if not t or SPACER_RE.match(t):
+                is_streak = False
+                break
+            if ":" in t or "：" in t:
+                is_streak = False
+                break
+            if _is_title_or_artist(t, title=title, artist=artist):
+                is_streak = False
+                break
+
+        if is_streak:
+            return i
+
+    return 0
+
+
 def _filter_opening_preamble(
     lines: list[LyricLine],
     title: str = "",
@@ -358,35 +360,44 @@ def _filter_opening_preamble(
 ) -> list[LyricLine]:
     """
     过滤开头的演职名单行：
-    - 仅在歌曲开头（例如时间戳 < 15000ms 或遇到第一句正式唱词前）做检查；
-    - 只要行内容包含 : / ：（如 Lyrics by:、词:、晴天 - 周杰伦），或者与歌曲名/歌手名重合，直接丢弃；
-    - 一旦遇到时间跨度出现空隙或正式行，立即终止前导检查，后面无论歌词里出现什么字眼都不再触发过滤。
+    冒号丢弃处理只能到第一句歌词（往下连续三句都是没有冒号的句子）。
+    第一句歌词之后不再做冒号丢弃处理。
     """
     if not lines:
         return lines
 
-    first_content_idx = 0
-    prev_ms: Optional[int] = None
-    GAP_THRESHOLD_MS = 4500
+    first_idx = _find_first_lyric_index(lines, title=title, artist=artist)
+    if first_idx == 0:
+        return lines
 
-    for idx, line in enumerate(lines):
-        # 仅在歌曲开头（时间戳 < 15000ms）做检查
-        if line.time_ms >= 15000:
-            break
+    filtered_pre: list[LyricLine] = []
+    for idx in range(first_idx):
+        line = lines[idx]
+        t = line.text.strip()
+        if not t or SPACER_RE.match(t):
+            continue
 
-        # 时间跨度出现空隙，立即终止前导检查
-        if prev_ms is not None and (line.time_ms - prev_ms >= GAP_THRESHOLD_MS):
-            break
+        # 歌名/歌手信息行直接丢弃
+        if _is_title_or_artist(t, title=title, artist=artist):
+            continue
 
-        # 检查是否为前导行（包含 : / ： 或与歌名/歌手重合）
-        if _is_preamble_line(line.text, title=title, artist=artist):
-            prev_ms = line.time_ms
-            first_content_idx = idx + 1
-        else:
-            # 遇到第一句正式唱词，立即终止前导检查
-            break
+        # 只有单行 "人名：" (末尾为冒号且冒号后无字) 才能作为歌手标签保留
+        if STANDALONE_COLON_RE.match(t):
+            filtered_pre.append(line)
+            continue
 
-    return lines[first_content_idx:]
+        # 段落标记行（如 - 间奏 -，【间奏】）保留
+        if SECTION_DASH_RE.match(t) or STANDALONE_BRACKET_RE.match(t):
+            filtered_pre.append(line)
+            continue
+
+        # 在第一句歌词之前，单行冒号后面有字（如 词：、Piano：、Guitar： 等名单行），全部丢弃
+        if ":" in t or "：" in t:
+            continue
+
+        filtered_pre.append(line)
+
+    return filtered_pre + lines[first_idx:]
 
 
 
@@ -688,35 +699,99 @@ def _process_sections_and_roles(parsed: ParsedLyrics, parse_sections: Optional[b
         if not raw_text or SPACER_RE.match(raw_text):
             continue
 
-        # 1. 过滤任何位置出现的幕后制作人员名单行 (如 "混音工程师: 赵靖", "母带制作: xxx")
-        if _is_credit_line(raw_text):
-            continue
 
-        # 2. 独立段落章节标记行 (如 "- 间奏 -", "[Chorus]", "【副歌】")
-        sec_match = SECTION_STANDALONE_RE.match(raw_text)
-        if sec_match:
-            sec_name = (sec_match.group(1) or sec_match.group(2) or "").strip()
-            if NUM_RE.match(sec_name):
+        # 2. 独立破折号/装饰线段落标记行 (如 "- 间奏 -", "- 莱塔尼亚 -", "— Verse 1 —")
+        dash_match = SECTION_DASH_RE.match(raw_text)
+        if dash_match:
+            sec_name = dash_match.group(1).strip()
+            # 特例：横杠中间纯数字（如 "- 1 -", "— 10 —", "- 01 -", "- IV -"）不解析为段落名，仅清空上一段落
+            if NUMERIC_TAG_RE.match(sec_name):
                 current_sec = ""
             else:
                 current_sec = sec_name
             current_role = ""
             continue
 
-        # 3. 独立分段角色名行：严格限定只有单行 "人名: " 或 "人名：" 才解析为歌手段落 (如 "茶理理:", "【hanser】:")
-        role_match = ROLE_STANDALONE_RE.match(raw_text)
-        if role_match:
-            cand = role_match.group(1).strip()
-            # 过滤纯数字以及幕后制作人职衔
-            if not NUM_RE.match(cand) and not _is_credit_keyword(cand):
-                current_role = cand
-                continue
+        # 3. 独立括号标记行 (如 "【间奏】", "[Chorus]", "【吉他独奏】" 等)
+        # 单独一个括号直接忽略删除，绝不保留为歌词行，也绝不作为歌手角色名（因不会拿方括号单独写名字）
+        bracket_match = STANDALONE_BRACKET_RE.match(raw_text)
+        if bracket_match:
+            inner = bracket_match.group(1).strip()
+            if SECTION_KEYWORD_RE.match(inner):
+                current_sec = inner
             else:
-                # 遇到幕后职衔单行标记（如 "作词:", "混音:"），跳过且清除当前角色
+                # 【间奏】、纯数字、独奏等括号标记不作后续歌词章节，直接清空章节标记
+                current_sec = ""
+            current_role = ""
+            continue
+
+        # 3. 独立冒号角色单行 (如 "茶理理:", "史尔特尔/尹昔眠：")
+        # 只有单行 "人名：" 才能作为歌手标签
+        colon_match = STANDALONE_COLON_RE.match(raw_text)
+        if colon_match:
+            cand = colon_match.group(1).strip()
+            if not NUMERIC_TAG_RE.match(cand):
+                if SECTION_KEYWORD_RE.match(cand):
+                    current_sec = cand
+                    current_role = ""
+                else:
+                    current_role = cand
+            else:
                 current_role = ""
+            continue
+
+        # 5. 独立纯数字序号或独立章节名 (如单独一行 "10", "间奏", "Chorus")
+        if NUMERIC_TAG_RE.match(raw_text):
+            current_sec = ""
+            current_role = ""
+            continue
+
+        if SECTION_KEYWORD_RE.match(raw_text):
+            current_sec = raw_text
+            current_role = ""
+            continue
+
+        # 5. 行内括号角色前缀 (如 "【史尔特尔/尹昔眠】燃烧吧 黄昏余烬的光")
+        inline_match = ROLE_INLINE_BRACKET_RE.match(raw_text)
+        if inline_match:
+            cand = inline_match.group(1).strip()
+            lyric_body = inline_match.group(2).strip()
+
+            if not NUMERIC_TAG_RE.match(cand):
+                if SECTION_KEYWORD_RE.match(cand):
+                    current_sec = cand
+                    current_role = ""
+                else:
+                    current_role = cand
+
+                line.section = current_sec
+                line.role = current_role
+                line.text = lyric_body
+
+                # 同步安全裁切逐字歌词 (words)
+                if line.words:
+                    words_text = "".join(w.text for w in line.words)
+                    if words_text != lyric_body:
+                        prefix_len = len(words_text) - len(lyric_body) if words_text.endswith(lyric_body) else (len(raw_text) - len(lyric_body))
+                        accum = 0
+                        cut_idx = 0
+                        for idx, w in enumerate(line.words):
+                            accum += len(w.text)
+                            if accum >= prefix_len:
+                                cut_idx = idx + 1
+                                break
+                        trimmed = line.words[cut_idx:]
+                        if trimmed:
+                            line.words = trimmed
+                            line.time_ms = trimmed[0].time_ms
+                            if line.duration_ms > 0:
+                                last = trimmed[-1]
+                                line.duration_ms = max(0, (last.time_ms + last.duration_ms) - line.time_ms)
+
+                processed.append(line)
                 continue
 
-        # 4. 普通歌词行：继承当前段落与角色名（不将带有冒号的普通歌词误判为角色）
+        # 7. 普通歌词行：继承当前段落与角色名
         line.section = current_sec
         line.role = current_role
         processed.append(line)

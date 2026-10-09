@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from core import db_cache
+from core import db_cache, settings
 from core.lyrics_parser import ParsedLyrics, parse_raw_bundle
 from core.providers import (
     LrclibLyricProvider,
@@ -270,3 +270,118 @@ def fetch_lyrics_multi(
     if final_lyrics:
         _mem_cache[cache_key] = result
     return result
+
+
+def fetch_and_apply_override(
+    track_title: str,
+    track_artist: str,
+    song_item: SearchSongItem,
+    on_progress: Optional[Callable[[float], None]] = None,
+    on_sub_name: Optional[Callable[[str, str, str], None]] = None,
+    on_cover: Optional[Callable[[str, str, bytes], None]] = None,
+) -> tuple[Optional[ParsedLyrics], Optional[bytes], str]:
+    """手动指定特定歌曲项并解析、持久化覆盖当前歌曲"""
+    if on_progress:
+        on_progress(0.2)
+
+    prov = song_item.provider.lower()
+    raw_res: Optional[RawLyricResult] = None
+    cover_data: Optional[bytes] = None
+
+    if prov == "netease":
+        if song_item.pic_url:
+            cover_data = NETEASE_PROVIDER.download_cover(song_item.pic_url)
+        raw_res = NETEASE_PROVIDER.get_lyrics(song_item)
+    elif prov == "qqmusic":
+        if song_item.pic_url:
+            cover_data = QQMUSIC_PROVIDER.download_cover(song_item.pic_url)
+        raw_res = QQMUSIC_PROVIDER.get_lyrics(song_item)
+    elif prov == "lrclib":
+        raw_res = LRCLIB_PROVIDER.get_lyrics(song_item)
+
+    if on_progress:
+        on_progress(0.7)
+
+    parsed_lyrics: Optional[ParsedLyrics] = None
+    sub_name = song_item.sub_name or (raw_res.sub_name if raw_res else "")
+
+    if raw_res:
+        if raw_res.cover_data and not cover_data:
+            cover_data = raw_res.cover_data
+        parsed_lyrics = parse_raw_bundle(
+            yrc_text=raw_res.yrc,
+            qrc_text=raw_res.qrc,
+            lrc_text=raw_res.lrc,
+            tlyric_text=raw_res.tlyric,
+            romalrc_text=raw_res.romalrc,
+            title=song_item.title or track_title,
+            artist=song_item.artist or track_artist,
+            provider=song_item.provider,
+            song_id=song_item.song_id,
+            is_instrumental=raw_res.is_instrumental,
+        )
+
+    if on_sub_name and sub_name:
+        on_sub_name(track_title, track_artist, sub_name)
+    if on_cover and cover_data:
+        on_cover(track_title, track_artist, cover_data)
+
+    if parsed_lyrics:
+        # 直接更新数据库本地缓存与内存缓存
+        db_cache.save_song_cache(
+            title=track_title,
+            artist=track_artist,
+            parsed=parsed_lyrics,
+            hd_cover=cover_data,
+            sub_name=sub_name,
+            provider=song_item.provider,
+            song_id=song_item.song_id,
+        )
+        cache_key = f"{track_title.lower().strip()}|||{track_artist.lower().strip()}"
+        _mem_cache[cache_key] = (parsed_lyrics, cover_data, sub_name)
+
+    if on_progress:
+        on_progress(1.0)
+
+    return parsed_lyrics, cover_data, sub_name
+
+
+def clear_song_cache(title: str, artist: str = "") -> None:
+    """清除当前歌曲的数据库本地缓存与内存缓存"""
+    db_cache.delete_song_cache(title, artist)
+    cache_key = f"{title.lower().strip()}|||{artist.lower().strip()}"
+    _mem_cache.pop(cache_key, None)
+
+
+def search_all_sources(
+    title: str,
+    artist: str = "",
+    provider_filter: str = "all",
+    limit: int = 15
+) -> list[SearchSongItem]:
+    """多源聚合搜索候选歌曲列表"""
+    prov = (provider_filter or "all").lower().strip()
+    results: list[SearchSongItem] = []
+
+    if prov in ("all", "netease"):
+        try:
+            items = NETEASE_PROVIDER.search_songs(title, artist, limit=limit)
+            results.extend(items)
+        except Exception as e:
+            print(f"[lyrics_fetcher] netease search_songs 异常: {e}")
+
+    if prov in ("all", "qqmusic"):
+        try:
+            items = QQMUSIC_PROVIDER.search_songs(title, artist, limit=limit)
+            results.extend(items)
+        except Exception as e:
+            print(f"[lyrics_fetcher] qqmusic search_songs 异常: {e}")
+
+    if prov in ("all", "lrclib"):
+        try:
+            items = LRCLIB_PROVIDER.search_songs(title, artist, limit=limit)
+            results.extend(items)
+        except Exception as e:
+            print(f"[lyrics_fetcher] lrclib search_songs 异常: {e}")
+
+    return results

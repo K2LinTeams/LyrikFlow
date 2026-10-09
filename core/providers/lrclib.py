@@ -40,6 +40,28 @@ class LrclibLyricProvider(BaseLyricProvider):
             pass
         return None
 
+    def search_songs(self, title: str, artist: str = "", limit: int = 15) -> list[SearchSongItem]:
+        url = "https://lrclib.net/api/search"
+        params = {"q": f"{title} {artist}".strip()}
+        results: list[SearchSongItem] = []
+        try:
+            resp = requests.get(url, params=params, headers=LRCLIB_HEADERS, timeout=TIMEOUT)
+            if resp.status_code == 200:
+                items = resp.json()
+                if isinstance(items, list):
+                    for item in items[:limit]:
+                        results.append(SearchSongItem(
+                            song_id=str(item.get("id")),
+                            title=item.get("trackName", title),
+                            artist=item.get("artistName", artist),
+                            album=item.get("albumName", ""),
+                            duration_ms=int(item.get("duration", 0)) * 1000,
+                            provider=self.provider_name,
+                        ))
+        except Exception:
+            pass
+        return results
+
     def get_lyrics(self, song_item: SearchSongItem) -> Optional[RawLyricResult]:
         url = f"https://lrclib.net/api/get/{song_item.song_id}"
         try:

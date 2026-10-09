@@ -77,14 +77,21 @@ def init_db() -> None:
             conn.close()
 
 
+def _normalize_key_str(s: str) -> str:
+    return s.replace("’", "'").replace("‘", "'").replace("`", "'").replace("“", '"').replace("”", '"').lower().strip()
+
+
 def make_track_key(title: str, artist: str) -> str:
-    """归一化歌曲唯一检索键"""
-    return f"{title.lower().strip()}|||{artist.lower().strip()}"
+    """归一化歌曲唯一检索键（统一弯引号等符号）"""
+    return f"{_normalize_key_str(title)}|||{_normalize_key_str(artist)}"
 
 
 def get_song_cache(title: str, artist: str) -> Optional[dict[str, Any]]:
     """从 SQLite 查询已缓存的结构化歌词与封面"""
     key = make_track_key(title, artist)
+    raw_key = f"{title.lower().strip()}|||{artist.lower().strip()}"
+    curly_key = raw_key.replace("'", "’")
+
     with _lock:
         conn = _get_connection()
         try:
@@ -92,8 +99,8 @@ def get_song_cache(title: str, artist: str) -> Optional[dict[str, Any]]:
             cursor.execute("""
                 SELECT lyrics_json, cover_data, sub_name, provider, song_id 
                 FROM song_cache 
-                WHERE track_key = ?
-            """, (key,))
+                WHERE track_key = ? OR track_key = ? OR track_key = ?
+            """, (key, raw_key, curly_key))
             row = cursor.fetchone()
             if not row:
                 return None
@@ -215,6 +222,24 @@ def update_song_offset(title: str, artist: str = "", offset_ms: int = 0) -> bool
             return True
         except Exception as e:
             print(f"[db_cache] 更新歌曲偏移量异常: {e}")
+            return False
+        finally:
+            conn.close()
+
+
+def delete_song_cache(title: str, artist: str = "") -> bool:
+    """删除 SQLite 缓存中指定歌曲的记录"""
+    if not title:
+        return False
+    key = make_track_key(title, artist)
+    with _lock:
+        conn = _get_connection()
+        try:
+            conn.execute("DELETE FROM song_cache WHERE track_key = ?", (key,))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"[db_cache] 删除歌曲缓存异常: {e}")
             return False
         finally:
             conn.close()

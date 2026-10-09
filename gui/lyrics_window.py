@@ -317,6 +317,12 @@ class LyricsWindow(QObject):
         cached = db_cache.get_song_cache(self._current_title, self._current_artist)
         if cached and cached.get("parsed"):
             self._lyrics = cached["parsed"]
+            hd_cover = cached.get("hd_cover")
+            if hd_cover and len(hd_cover) > 500:
+                self._thumb_bytes = bytes(hd_cover)
+                self._overlay.update_hd_cover(hd_cover)
+                self._fullscreen.update_hd_cover(hd_cover)
+            self._overlay.set_status_text("")
             self._push_lyrics_to_ui()
             current_ms = max(0, self.smtc._get_elapsed_ms())
             if self._lyrics:
@@ -324,6 +330,8 @@ class LyricsWindow(QObject):
                 self._cur_index = idx
                 self._overlay.set_current_time(current_ms, idx)
                 self._fullscreen.set_current_time(current_ms, idx)
+            self._overlay.update()
+            self._fullscreen.update()
 
     # ── 系统托盘 ─────────────────────────────────────────────────────────────
     def _setup_tray(self) -> QSystemTrayIcon:
