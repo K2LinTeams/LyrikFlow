@@ -46,7 +46,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "secondary_mode": "prefer_trans",
         "show_line_progress": True,
         "offset_ms": 0,
-        "song_offsets": {},
         "parse_sections": True,
     },
     "fullscreen": {
@@ -145,16 +144,6 @@ def _migrate_from_qsettings(cfg: dict[str, Any]) -> dict[str, Any]:
                 cfg["lyrics"]["offset_ms"] = int(s.value("lyrics/offset_ms"))
             except Exception:
                 pass
-
-        if "lyrics/song_offsets" in keys:
-            raw_so = s.value("lyrics/song_offsets")
-            if raw_so:
-                try:
-                    parsed_so = json.loads(str(raw_so)) if isinstance(raw_so, str) else raw_so
-                    if isinstance(parsed_so, dict):
-                        cfg["lyrics"]["song_offsets"] = {str(k): int(v) for k, v in parsed_so.items()}
-                except Exception:
-                    pass
 
         if "lyrics/parse_sections" in keys:
             raw_ps = s.value("lyrics/parse_sections")
@@ -327,45 +316,25 @@ def make_song_key(title: str, artist: str = "") -> str:
     return f"{t} - {a}" if a else t
 
 def get_song_offsets() -> dict[str, int]:
-    """读取所有单独配置的歌曲偏移字典 {song_key: offset_ms}"""
-    val = _get(["lyrics", "song_offsets"], {})
-    if isinstance(val, dict):
-        res: dict[str, int] = {}
-        for k, v in val.items():
-            if str(k).strip():
-                try:
-                    res[str(k).strip()] = int(v)
-                except (ValueError, TypeError):
-                    pass
-        return res
-    return {}
+    """读取所有单独配置的歌曲偏移字典（从 SQLite 数据库获取）"""
+    try:
+        from core import db_cache
+        return db_cache.get_all_song_offsets()
+    except Exception:
+        return {}
 
 def get_song_offset(title: str, artist: str = "") -> Optional[int]:
-    """获取指定歌曲的单独偏移量（毫秒），未单独配置时返回 None"""
+    """获取指定歌曲的单独偏移量（毫秒，从 SQLite 数据库获取），未单独配置时返回 None"""
     if not title:
         return None
-    offsets = get_song_offsets()
-    key_std = make_song_key(title, artist)
-    if key_std in offsets:
-        return offsets[key_std]
-
-    key_pipe = f"{title.strip()}|||{artist.strip()}"
-    if key_pipe in offsets:
-        return offsets[key_pipe]
-
-    # 大小写不敏感及格式变体匹配
-    t_lower = title.strip().lower()
-    a_lower = artist.strip().lower()
-    for k, v in offsets.items():
-        k_lower = k.lower().strip()
-        if k_lower == key_std.lower() or k_lower == key_pipe.lower():
-            return v
-        if a_lower and k_lower == f"{a_lower} - {t_lower}":
-            return v
-    return None
+    try:
+        from core import db_cache
+        return db_cache.get_song_offset(title, artist)
+    except Exception:
+        return None
 
 def get_effective_song_offset(title: str, artist: str = "") -> int:
-    """获取指定歌曲的最终生效偏移量（优先独立配置，未配置时使用全局默认偏移）"""
+    """获取指定歌曲的最终生效偏移量（优先 SQLite 数据库独立配置，未配置时使用全局默认偏移）"""
     val = get_song_offset(title, artist)
     if val is not None:
         return val
@@ -435,44 +404,32 @@ def set_offset_ms(v: int) -> None:
     _set(["lyrics", "offset_ms"], int(v))
 
 def set_song_offset(title: str, artist: str = "", offset_ms: int = 0) -> None:
-    """设置单首歌曲的独立偏移量并持久化到 YAML"""
+    """设置单首歌曲的独立偏移量并持久化到 SQLite 数据库"""
     if not title:
         return
-    with _lock:
-        key = make_song_key(title, artist)
-        offsets = get_song_offsets()
-        offsets[key] = int(offset_ms)
-        _set(["lyrics", "song_offsets"], offsets)
+    try:
+        from core import db_cache
+        db_cache.set_song_offset(title, artist, int(offset_ms))
+    except Exception as e:
+        print(f"[Settings] 设置歌曲独立偏移异常: {e}")
 
 def remove_song_offset(title: str, artist: str = "") -> None:
-    """移除单首歌曲的独立偏移量配置（恢复使用全局默认值）"""
+    """移除单首歌曲的独立偏移量配置（从 SQLite 数据库）"""
     if not title:
         return
-    with _lock:
-        offsets = get_song_offsets()
-        key_std = make_song_key(title, artist)
-        key_pipe = f"{title.strip()}|||{artist.strip()}"
-        keys_to_del = [
-            k for k in offsets
-            if k.lower() in (key_std.lower(), key_pipe.lower())
-        ]
-        if keys_to_del:
-            for k in keys_to_del:
-                offsets.pop(k, None)
-            _set(["lyrics", "song_offsets"], offsets)
+    try:
+        from core import db_cache
+        db_cache.remove_song_offset(title, artist)
+    except Exception as e:
+        print(f"[Settings] 移除歌曲独立偏移异常: {e}")
 
 def set_all_song_offsets(offsets: dict[str, int]) -> None:
-    """全量更新歌曲独立偏移字典"""
-    with _lock:
-        cleaned: dict[str, int] = {}
-        for k, v in offsets.items():
-            k_str = str(k).strip()
-            if k_str:
-                try:
-                    cleaned[k_str] = int(v)
-                except (ValueError, TypeError):
-                    pass
-        _set(["lyrics", "song_offsets"], cleaned)
+    """全量更新 SQLite 数据库中的歌曲独立偏移字典"""
+    try:
+        from core import db_cache
+        db_cache.set_all_song_offsets(offsets)
+    except Exception as e:
+        print(f"[Settings] 全量更新歌曲独立偏移异常: {e}")
 
 def set_font_configs(configs: list[dict]) -> None:
     """保存字体配置列表"""

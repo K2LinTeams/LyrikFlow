@@ -39,6 +39,11 @@ from .db_cache import (
     get_song_cache,
     save_song_cache,
     update_song_offset,
+    get_song_offset as get_db_song_offset,
+    get_all_song_offsets as get_all_db_song_offsets,
+    set_song_offset as set_db_song_offset,
+    remove_song_offset as remove_db_song_offset,
+    set_all_song_offsets as set_all_db_song_offsets,
     DATA_DIR,
     DB_PATH,
 )

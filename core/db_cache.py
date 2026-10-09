@@ -72,6 +72,20 @@ def init_db() -> None:
                 CREATE INDEX IF NOT EXISTS idx_song_track_key 
                 ON song_cache(track_key);
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS song_offsets (
+                    track_key TEXT PRIMARY KEY,
+                    song_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    artist TEXT NOT NULL,
+                    offset_ms INTEGER NOT NULL DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_song_offsets_key 
+                ON song_offsets(track_key);
+            """)
             conn.commit()
         finally:
             conn.close()
@@ -243,6 +257,178 @@ def delete_song_cache(title: str, artist: str = "") -> bool:
             return False
         finally:
             conn.close()
+
+
+def get_song_offset(title: str, artist: str = "") -> Optional[int]:
+    """从 SQLite 数据库获取指定歌曲的独立偏移量（毫秒），未单独配置时返回 None"""
+    if not title:
+        return None
+    key = make_track_key(title, artist)
+    raw_key = f"{title.lower().strip()}|||{artist.lower().strip()}"
+    curly_key = raw_key.replace("'", "’")
+    std_key = f"{title.strip()} - {artist.strip()}" if artist.strip() else title.strip()
+
+    with _lock:
+        conn = _get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT offset_ms FROM song_offsets 
+                WHERE track_key = ? OR track_key = ? OR track_key = ? OR song_key = ?
+            """, (key, raw_key, curly_key, std_key))
+            row = cursor.fetchone()
+            if row is not None:
+                return int(row[0])
+
+            # 兼容：若 song_offsets 表未命中，尝试从 song_cache 的 ParsedLyrics 中读取
+            cursor.execute("""
+                SELECT lyrics_json FROM song_cache
+                WHERE track_key = ? OR track_key = ? OR track_key = ?
+            """, (key, raw_key, curly_key))
+            row_c = cursor.fetchone()
+            if row_c and row_c[0]:
+                lj = _decompress_lyrics(row_c[0])
+                if lj:
+                    p = ParsedLyrics.from_json(lj)
+                    if p and p.offset_ms != 0:
+                        return int(p.offset_ms)
+        except Exception as e:
+            print(f"[db_cache] 查询歌曲偏移异常: {e}")
+        finally:
+            conn.close()
+    return None
+
+
+def get_all_song_offsets() -> dict[str, int]:
+    """从 SQLite 数据库获取所有单独配置的歌曲独立偏移量字典 {song_key: offset_ms}"""
+    with _lock:
+        conn = _get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT song_key, offset_ms FROM song_offsets ORDER BY updated_at DESC")
+            rows = cursor.fetchall()
+            return {str(r[0]): int(r[1]) for r in rows if str(r[0]).strip()}
+        except Exception as e:
+            print(f"[db_cache] 查询所有歌曲偏移异常: {e}")
+            return {}
+        finally:
+            conn.close()
+
+
+def set_song_offset(title: str, artist: str = "", offset_ms: int = 0) -> None:
+    """持久化保存单首歌曲的独立偏移量至 SQLite 数据库"""
+    if not title:
+        return
+    key = make_track_key(title, artist)
+    t = title.strip()
+    a = artist.strip()
+    song_key = f"{t} - {a}" if a else t
+    with _lock:
+        conn = _get_connection()
+        try:
+            conn.execute("""
+                INSERT INTO song_offsets (track_key, song_key, title, artist, offset_ms, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(track_key) DO UPDATE SET
+                    song_key = excluded.song_key,
+                    title = excluded.title,
+                    artist = excluded.artist,
+                    offset_ms = excluded.offset_ms,
+                    updated_at = CURRENT_TIMESTAMP;
+            """, (key, song_key, t, a, int(offset_ms)))
+            conn.commit()
+        except Exception as e:
+            print(f"[db_cache] 设置歌曲偏移异常: {e}")
+        finally:
+            conn.close()
+
+    # 同步更新 song_cache 中的 ParsedLyrics 歌词结构
+    update_song_offset(title, artist, int(offset_ms))
+
+
+def remove_song_offset(title: str, artist: str = "") -> None:
+    """从 SQLite 数据库移除单首歌曲的独立偏移量配置"""
+    if not title:
+        return
+    key = make_track_key(title, artist)
+    raw_key = f"{title.lower().strip()}|||{artist.lower().strip()}"
+    curly_key = raw_key.replace("'", "’")
+    std_key = f"{title.strip()} - {artist.strip()}" if artist.strip() else title.strip()
+    with _lock:
+        conn = _get_connection()
+        try:
+            conn.execute("""
+                DELETE FROM song_offsets 
+                WHERE track_key = ? OR track_key = ? OR track_key = ? OR song_key = ?
+            """, (key, raw_key, curly_key, std_key))
+            conn.commit()
+        except Exception as e:
+            print(f"[db_cache] 移除歌曲偏移异常: {e}")
+        finally:
+            conn.close()
+
+    # 重置 song_cache 中的 ParsedLyrics 偏移为 0
+    update_song_offset(title, artist, 0)
+
+
+def set_all_song_offsets(offsets: dict[str, int]) -> None:
+    """全量更新 SQLite 数据库中的歌曲独立偏移量配置"""
+    with _lock:
+        conn = _get_connection()
+        try:
+            conn.execute("DELETE FROM song_offsets")
+            for k, v in offsets.items():
+                song_key = str(k).strip()
+                if not song_key:
+                    continue
+                try:
+                    offset_val = int(v)
+                except (ValueError, TypeError):
+                    continue
+                if "|||" in song_key:
+                    parts = song_key.split("|||", 1)
+                    title, artist = parts[0].strip(), parts[1].strip()
+                elif " - " in song_key:
+                    parts = song_key.split(" - ", 1)
+                    title, artist = parts[0].strip(), parts[1].strip()
+                else:
+                    title, artist = song_key, ""
+                track_key = make_track_key(title, artist)
+                std_key = f"{title} - {artist}" if artist else title
+                conn.execute("""
+                    INSERT INTO song_offsets (track_key, song_key, title, artist, offset_ms, updated_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(track_key) DO UPDATE SET
+                        song_key = excluded.song_key,
+                        title = excluded.title,
+                        artist = excluded.artist,
+                        offset_ms = excluded.offset_ms,
+                        updated_at = CURRENT_TIMESTAMP;
+                """, (track_key, std_key, title, artist, offset_val))
+            conn.commit()
+        except Exception as e:
+            print(f"[db_cache] 全量更新歌曲偏移异常: {e}")
+        finally:
+            conn.close()
+
+    # 同步更新已缓存歌词的 offset_ms
+    for k, v in offsets.items():
+        song_key = str(k).strip()
+        if not song_key:
+            continue
+        try:
+            offset_val = int(v)
+        except (ValueError, TypeError):
+            continue
+        if "|||" in song_key:
+            parts = song_key.split("|||", 1)
+            t, a = parts[0].strip(), parts[1].strip()
+        elif " - " in song_key:
+            parts = song_key.split(" - ", 1)
+            t, a = parts[0].strip(), parts[1].strip()
+        else:
+            t, a = song_key, ""
+        update_song_offset(t, a, offset_val)
 
 
 init_db()

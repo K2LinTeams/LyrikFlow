@@ -25,7 +25,6 @@ lyrics:
   show_line_progress: true  # 无逐字歌词时是否显示单句胶囊进度条
   offset_ms: 0              # 全局歌词同步时间微调偏移 (毫秒, 正值提前, 负值延后)
   parse_sections: true      # 是否开启段落与分段角色名解析 (隐藏标记行并将角色显示在翻译行)
-  song_offsets: {}          # 每首歌单独配置的偏移量 (格式: "歌名 - 歌手": 毫秒, 未配置的歌曲使用全局 offset_ms)
 
 fullscreen:
   context_lines: 5          # 全画幅模式上下文阶梯显示行数 (1 ~ 8)

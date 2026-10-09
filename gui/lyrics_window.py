@@ -148,7 +148,7 @@ class LyricsWindow(QObject):
         # 优先从本地数据库读取缓存
         cached = db_cache.get_song_cache(title, artist)
         if cached and cached.get("parsed"):
-            if settings.get_song_offset(title, artist) is None and cached["parsed"].offset_ms != 0:
+            if db_cache.get_song_offset(title, artist) is None and cached["parsed"].offset_ms != 0:
                 self.smtc.set_offset(cached["parsed"].offset_ms)
             hd_cover = cached.get("hd_cover")
             sub_name = cached.get("sub_name", "")

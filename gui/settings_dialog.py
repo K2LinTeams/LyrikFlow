@@ -588,7 +588,7 @@ class SettingsDialog(QDialog):
             cached = db_cache.get_song_cache(self._current_title, self._current_artist)
             if cached and cached.get("hd_cover"):
                 self._thumb_bytes = cached["hd_cover"]
-        self._song_offsets_draft: dict[str, int] = dict(settings.get_song_offsets())
+        self._song_offsets_draft: dict[str, int] = dict(db_cache.get_all_song_offsets())
         self._initial_opacity = settings.get_opacity()
         self._initial_offset = settings.get_effective_song_offset(self._current_title, self._current_artist)
 
@@ -1838,7 +1838,7 @@ class SettingsDialog(QDialog):
             self._spin_song_off.setSingleStep(100)
 
             # 获取当前歌是否已有单独配置
-            existing_song_off = settings.get_song_offset(self._current_title, self._current_artist)
+            existing_song_off = db_cache.get_song_offset(self._current_title, self._current_artist)
             if existing_song_off is not None:
                 self._chk_song_custom.setChecked(True)
                 self._spin_song_off.setValue(existing_song_off)
@@ -2089,18 +2089,18 @@ class SettingsDialog(QDialog):
         settings.set_offset_ms(self._spin_off.value())
         settings.set_fullscreen_context_lines(self._spin_fs_lines.value())
 
-        # 3. 歌曲独立偏移配置持久化
+        # 3. 歌曲独立偏移配置持久化到数据库
         if self._current_title and hasattr(self, "_chk_song_custom") and self._chk_song_custom is not None:
             cur_key = settings.make_song_key(self._current_title, self._current_artist)
             if self._chk_song_custom.isChecked():
                 val = self._spin_song_off.value()
                 self._song_offsets_draft[cur_key] = val
-                db_cache.update_song_offset(self._current_title, self._current_artist, val)
+                db_cache.set_song_offset(self._current_title, self._current_artist, val)
             else:
                 self._song_offsets_draft.pop(cur_key, None)
                 self._song_offsets_draft.pop(f"{self._current_title}|||{self._current_artist}", None)
-                db_cache.update_song_offset(self._current_title, self._current_artist, 0)
+                db_cache.remove_song_offset(self._current_title, self._current_artist)
 
-        settings.set_all_song_offsets(self._song_offsets_draft)
+        db_cache.set_all_song_offsets(self._song_offsets_draft)
 
         self.accept()
