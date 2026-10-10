@@ -1,27 +1,37 @@
 """
-scripts/build_nuitka.py — Nuitka 构建与打包脚本 (支持本地与 GitHub Actions)
+scripts/build_nuitka.py — Nuitka build and packaging
 """
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import shutil
 import subprocess
 import sys
+import traceback
 import zipfile
+
+# Ensure UTF-8 output streams on Windows to prevent charmap encoding errors
+if sys.platform == "win32":
+    if sys.stdout and hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    if sys.stderr and hasattr(sys.stderr, "buffer"):
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def ensure_icon() -> str:
+    """Ensure assets/icon.ico exists, generating it if necessary."""
     assets_dir = os.path.join(PROJECT_ROOT, "assets")
     os.makedirs(assets_dir, exist_ok=True)
     icon_path = os.path.join(assets_dir, "icon.ico")
     if os.path.exists(icon_path) and os.path.getsize(icon_path) > 0:
         return icon_path
 
-    print("[Build] 正在自动生成应用程序图标 assets/icon.ico ...")
+    print("[Build] Generating application icon assets/icon.ico...")
     try:
         from PyQt6.QtCore import Qt
         from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPixmap
@@ -49,26 +59,25 @@ def ensure_icon() -> str:
         p.end()
 
         px.save(icon_path, "ico")
-        print(f"[Build] 图标已生成: {icon_path}")
+        print(f"[Build] Icon generated successfully: {icon_path}")
     except Exception as e:
-        print(f"[Build] 自动生成图标失败: {e}，将跳过设置图标")
+        print(f"[Build Warning] Could not generate icon: {e}, proceeding without icon.")
         return ""
     return icon_path
 
 
 def run_nuitka(clean: bool = False) -> str:
-    """Nuitka 编译"""
+    """Execute Nuitka compilation."""
     dist_dir = os.path.join(PROJECT_ROOT, "dist")
     build_dir = os.path.join(PROJECT_ROOT, "build")
 
     if clean:
-        print("[Build] 正在清理旧构建产物...")
+        print("[Build] Cleaning previous build artifacts...")
         for p in [dist_dir, build_dir]:
             if os.path.exists(p):
                 shutil.rmtree(p, ignore_errors=True)
 
     icon_path = ensure_icon()
-
     main_script = os.path.join(PROJECT_ROOT, "main.py")
 
     cmd = [
@@ -85,34 +94,31 @@ def run_nuitka(clean: bool = False) -> str:
         "--windows-product-name=LyrikFlow",
         "--windows-file-version=1.0.0.0",
         "--windows-product-version=1.0.0",
-        '--windows-file-description=LyrikFlow - Desktop Floating Lyrics',
+        "--windows-file-description=LyrikFlow - Desktop Floating Lyrics",
         "--include-package=core",
         "--include-package=gui",
         "--include-package=Crypto",
         "--include-package=yaml",
     ]
 
-    # 图标
     if icon_path and os.path.exists(icon_path):
         cmd.append(f"--windows-icon-from-ico={icon_path}")
 
-    # SMTC 依赖包
     if sys.version_info < (3, 13):
         cmd.append("--include-package=winsdk")
     else:
         cmd.append("--include-package=winrt")
 
-    # 入口
     cmd.append(main_script)
 
     print("\n" + "=" * 60)
-    print("[Build] 启动 Nuitka 编译:")
+    print("[Build] Running Nuitka:")
     print(" ".join(cmd))
     print("=" * 60 + "\n")
 
     subprocess.check_call(cmd, cwd=PROJECT_ROOT)
 
-    # 寻找生成的 dist 目录
+    # Locate output folder
     possible_dirs = [
         os.path.join(dist_dir, "LyrikFlow.dist"),
         os.path.join(dist_dir, "main.dist"),
@@ -124,9 +130,8 @@ def run_nuitka(clean: bool = False) -> str:
             break
 
     if not target_dist:
-        raise RuntimeError(f"未找到 Nuitka 输出目录，检查 {dist_dir}")
+        raise RuntimeError(f"Nuitka output directory not found in {dist_dir}")
 
-    # 重命名规范化为 dist/LyrikFlow
     final_app_dir = os.path.join(dist_dir, "LyrikFlow")
     if os.path.exists(final_app_dir) and os.path.abspath(final_app_dir) != os.path.abspath(target_dist):
         shutil.rmtree(final_app_dir, ignore_errors=True)
@@ -137,7 +142,8 @@ def run_nuitka(clean: bool = False) -> str:
 
 
 def stage_extra_files(app_dir: str) -> None:
-    print(f"[Build] 正在分发静态资源: {app_dir}")
+    """Copy runtime configuration examples, readme, and fonts."""
+    print(f"[Build] Staging extra static resources to: {app_dir}")
 
     # 1. config.example.yaml
     src_cfg_example = os.path.join(PROJECT_ROOT, "config.example.yaml")
@@ -149,7 +155,7 @@ def stage_extra_files(app_dir: str) -> None:
     if os.path.exists(src_readme):
         shutil.copy2(src_readme, os.path.join(app_dir, "README.md"))
 
-    # 3. data/fonts 目录与可用字体
+    # 3. data/fonts directory
     dest_data_fonts = os.path.join(app_dir, "data", "fonts")
     os.makedirs(dest_data_fonts, exist_ok=True)
 
@@ -168,12 +174,12 @@ def stage_extra_files(app_dir: str) -> None:
                         shutil.copy2(src_f, dest_f)
                         copied_fonts += 1
 
-    print(f"[Build] 静态资源同步完成 (包含 {copied_fonts} 个本地字体文件)。")
+    print(f"[Build] Staging completed ({copied_fonts} font files included).")
 
 
 def zip_directory(src_dir: str, zip_path: str) -> None:
-    print(f"[Build] 正在打包压缩: {zip_path} ...")
-    base_folder_name = os.path.basename(src_dir)
+    """Compress directory into zip archive."""
+    print(f"[Build] Creating ZIP archive: {zip_path} ...")
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for root, dirs, files in os.walk(src_dir):
             for file in files:
@@ -181,36 +187,38 @@ def zip_directory(src_dir: str, zip_path: str) -> None:
                 rel_path = os.path.relpath(full_path, os.path.dirname(src_dir))
                 zf.write(full_path, rel_path)
     size_mb = os.path.getsize(zip_path) / (1024 * 1024)
-    print(f"[Build] 打包成功! 文件大小: {size_mb:.2f} MB")
+    print(f"[Build] ZIP created successfully! Size: {size_mb:.2f} MB")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="LyrikFlow Nuitka 构建工具")
-    parser.add_argument("--clean", action="store_true", help="构建前清理旧产物")
-    parser.add_argument("--zip", action="store_true", default=True, help="编译完成后生成 ZIP 压缩包 (默认开启)")
-    parser.add_argument("--no-zip", dest="zip", action="store_false", help="不生成 ZIP 压缩包")
+    parser = argparse.ArgumentParser(description="LyrikFlow Nuitka Build Tool")
+    parser.add_argument("--clean", action="store_true", help="Clean previous build artifacts before compilation")
+    parser.add_argument("--zip", action="store_true", default=True, help="Create ZIP package after compilation (default: True)")
+    parser.add_argument("--no-zip", dest="zip", action="store_false", help="Do not create ZIP package")
     args = parser.parse_args()
 
     try:
         app_dir = run_nuitka(clean=args.clean)
         stage_extra_files(app_dir)
 
+        zip_dest = ""
         if args.zip:
             zip_dest = os.path.join(PROJECT_ROOT, "dist", "LyrikFlow-Windows-x64.zip")
             zip_directory(app_dir, zip_dest)
 
         print("\n" + "=" * 60)
-        print("LyrikFlow Nuitka 编译与打包完成")
-        print(f"📁 应用目录: {app_dir}")
-        if args.zip:
-            print(f"📦 压缩分发文件: {zip_dest}")
+        print("LyrikFlow Nuitka build and packaging succeeded!")
+        print(f"Application directory: {app_dir}")
+        if args.zip and zip_dest:
+            print(f"ZIP package: {zip_dest}")
         print("=" * 60 + "\n")
 
     except subprocess.CalledProcessError as e:
-        print(f"\n[Build Error] 编译命令返回失败退出码: {e.returncode}", file=sys.stderr)
+        print(f"\n[Build Error] Command returned non-zero exit code: {e.returncode}", file=sys.stderr)
         sys.exit(e.returncode)
     except Exception as e:
-        print(f"\n[Build Error] 打包过程发生异常: {e}", file=sys.stderr)
+        print(f"\n[Build Error] Exception during build: {e}", file=sys.stderr)
+        traceback.print_exc()
         sys.exit(1)
 
 

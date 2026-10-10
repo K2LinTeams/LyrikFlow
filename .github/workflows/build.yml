@@ -19,6 +19,8 @@ jobs:
 
     env:
       NUITKA_CACHE_DIR: ${{ github.workspace }}/.nuitka-cache
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
 
     steps:
       - name: Checkout Code
@@ -33,12 +35,13 @@ jobs:
           architecture: 'x64'
           cache: 'pip'
 
-      - name: Cache Nuitka CCache
+      - name: Cache Nuitka Compiler Cache
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.nuitka-cache
-          key: ${{ runner.os }}-nuitka-${{ hashFiles('requirements.txt', 'scripts/build_nuitka.py') }}
+          key: ${{ runner.os }}-nuitka-${{ github.ref_name }}-${{ github.sha }}
           restore-keys: |
+            ${{ runner.os }}-nuitka-${{ github.ref_name }}-
             ${{ runner.os }}-nuitka-
 
       - name: Install Python Dependencies
