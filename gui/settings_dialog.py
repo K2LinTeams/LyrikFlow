@@ -34,10 +34,35 @@ def build_dialog_stylesheet(font_css: str = "") -> str:
     if not font_css:
         font_css = font_manager.get_font_css_family()
     return f"""
-QDialog {{
+SettingsDialog, QDialog#SettingsDialog {{
     background: transparent;
     color: #1B1F24;
     font-family: {font_css};
+}}
+
+QMessageBox {{
+    background-color: #FFFFFF;
+    color: #1B1F24;
+    font-family: {font_css};
+}}
+QMessageBox QLabel {{
+    background-color: transparent;
+    color: #1B1F24;
+    font-size: 13px;
+}}
+QMessageBox QPushButton {{
+    background-color: #0B57D0;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 14px;
+    padding: 6px 20px;
+    font-family: {font_css};
+    font-size: 12px;
+    font-weight: 600;
+    min-width: 60px;
+}}
+QMessageBox QPushButton:hover {{
+    background-color: #0842A0;
 }}
 
 QLabel, QPushButton, QLineEdit, QSpinBox {{
@@ -578,6 +603,7 @@ class SettingsDialog(QDialog):
         thumb_bytes: Optional[bytes] = None,
     ):
         super().__init__(parent)
+        self.setObjectName("SettingsDialog")
         self.setWindowTitle("LyrikFlow — 设置与偏好")
         self._controller = controller
         self._overlay_widget = overlay_widget
@@ -1711,7 +1737,12 @@ class SettingsDialog(QDialog):
                 btn.setText("选用此版本")
                 btn.setEnabled(True)
                 from PyQt6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "应用失败", f"无法获取此版本的歌词：{msg}")
+                tip = ""
+                if item.provider.lower() == "qqmusic":
+                    tip = "\n\n该条目暂未拥有歌词数据，尝试一下其他音源吧。"
+                elif item.provider.lower() == "netease":
+                    tip = "\n\n该条目暂未拥有歌词数据，尝试一下其他音源吧。"
+                QMessageBox.warning(self, "应用失败", f"无法获取此版本的歌词：{msg}{tip}")
 
         self._apply_worker.apply_finished.connect(on_done)
         self._apply_worker.start()
