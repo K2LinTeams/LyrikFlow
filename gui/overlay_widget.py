@@ -24,7 +24,7 @@ except ImportError:
     from lyrics_parser import ParsedLyrics
 
 GRIP_SIZE = 22      # 右下角半矩形缩放热区尺寸
-FADE_MARGIN = 48.0  # 左右两端虚化遮罩宽度 (像素)
+FADE_MARGIN = 48.0  # 左右两端虚化遮罩宽度
 
 
 class OverlayWidget(QWidget):
@@ -44,7 +44,7 @@ class OverlayWidget(QWidget):
         self._show_line_progress: bool = settings.get_show_line_progress()
         self._status_text: str = "LyrikFlow"
 
-        # 歌曲信息（首句歌词前展示）
+        # 歌曲信息
         self._song_title: str = ""
         self._song_artist: str = ""
         self._thumb_pixmap: Optional[QPixmap] = None
@@ -75,14 +75,14 @@ class OverlayWidget(QWidget):
         self._font_sub = self._create_round_font(settings.get_font_size_context(), bold=False)
         self._is_verbatim_song: bool = False
 
-        # 封面加载动画状态 (0.0 ~ 1.0)
+        # 封面加载动画状态
         self._loading_progress: float = 1.0
         self._target_loading_progress: float = 1.0
         self._loading_spinner_angle: float = 0.0
         self._cover_alpha: float = 1.0
         self._target_cover_alpha: float = 1.0
 
-        # 渲染定时器 (~60fps)
+        # 渲染定时器
         self._render_timer = QTimer(self)
         self._render_timer.setInterval(16)
         self._render_timer.timeout.connect(self._on_render_tick)
@@ -230,7 +230,7 @@ class OverlayWidget(QWidget):
     def set_status_text(self, text: str) -> None:
         self._status_text = text
 
-    # ── 获取当前播放时间进度 (毫秒) ──────────────────────────────────────────
+    # ── 获取当前播放时间进度 ──────────────────────────────────────────
     def _get_live_elapsed_ms(self) -> float:
         if self._is_playing:
             return self._base_ms + (time.monotonic() - self._base_wall_time) * 1000.0
@@ -249,21 +249,21 @@ class OverlayWidget(QWidget):
         else:
             self._scroll_x = self._target_scroll_x
 
-        # 封面加载圆环进度插值 (Lerp)
+        # 封面加载圆环进度插值
         diff_p = self._target_loading_progress - self._loading_progress
         if abs(diff_p) > 0.001:
             self._loading_progress += diff_p * 0.075
         else:
             self._loading_progress = self._target_loading_progress
 
-        # 封面渐入透明度插值 (0.0 ~ 1.0)
+        # 封面渐入透明度插值
         diff_a = self._target_cover_alpha - self._cover_alpha
         if abs(diff_a) > 0.005:
             self._cover_alpha += diff_a * 0.16
         else:
             self._cover_alpha = self._target_cover_alpha
 
-        # 封面高清替换平滑交叉淡入 (Crossfade)
+        # 封面高清平滑淡入
         if self._thumb_crossfade < 1.0:
             diff_cf = 1.0 - self._thumb_crossfade
             if diff_cf > 0.01:
@@ -285,7 +285,7 @@ class OverlayWidget(QWidget):
         w, h = self.width(), self.height()
         live_ms = self._get_live_elapsed_ms()
 
-        # 判断是否为首句歌词唱响前（前奏 / 加载中）
+        # 判断是否为首句歌词唱响前
         first_line_time = 0
         if self._lyrics and self._lyrics.lines:
             first_line_time = self._lyrics.lines[0].time_ms
@@ -299,7 +299,7 @@ class OverlayWidget(QWidget):
         is_instrumental = bool(self._lyrics and self._lyrics.is_instrumental)
 
         if is_instrumental or (is_before_first_line and (self._song_title or self._thumb_pixmap)):
-            # ── 状态 A：纯音乐或首句唱响前展示歌曲信息卡片（封面+歌名+歌手） ──
+            # ── 状态 A：纯音乐或首句唱响前展示歌曲信息卡片 ──
             self._render_song_intro_card(painter, w, h, is_instrumental=is_instrumental)
         elif not self._lyrics or not self._lyrics.lines:
             # 待机占位
@@ -345,7 +345,7 @@ class OverlayWidget(QWidget):
             painter.save()
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-            # 轨道底环 (Frosted Track)
+            # 轨道底环
             track_pen = QPen(QColor(255, 255, 255, int(self._opacity * 35)))
             track_pen.setWidthF(2.5)
             track_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -445,7 +445,7 @@ class OverlayWidget(QWidget):
                 painter.setPen(QColor(255, 255, 255, int(self._opacity * 130)))
             painter.drawText(int(text_x), int(s_base_y), artist)
 
-    # ── 歌词展示阶段（支持边缘 Alpha 渐变遮罩）─────────────
+    # ── 歌词展示阶段 ─────────────────────────────────────────────
     def _render_lyrics_with_edge_feather(self, painter: QPainter, w: int, h: int, live_ms: float) -> None:
         idx = max(0, min(len(self._lyrics.lines) - 1, self._cur_index if self._cur_index >= 0 else 0))
         current_line = self._lyrics.lines[idx]
@@ -624,7 +624,7 @@ class OverlayWidget(QWidget):
             self._target_scroll_x = 0.0
             start_x = (w - main_w) / 2.0
 
-        # ── 2. 计算逐字进度的绝对染色坐标 (progress_x) ──
+        # ── 2. 计算逐字进度的绝对染色坐标 ──
         if force_full_progress:
             progress_x = start_x + main_w
         elif self._is_verbatim_song:
@@ -654,7 +654,7 @@ class OverlayWidget(QWidget):
         else:
             progress_x = start_x
 
-        # ── 3. 样式分支：逐字歌曲 vs 非逐字歌曲（切歌时判定，歌曲全程统一）──
+        # ── 3. 样式分支：逐字歌曲 vs 非逐字歌曲 ──
         if self._is_verbatim_song:
             # ── 模式 A：逐字歌词 ──
             painter.setFont(self._font_main)
@@ -698,7 +698,7 @@ class OverlayWidget(QWidget):
             for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
                 painter.drawText(int(start_x + dx), int(main_baseline + dy), text)
 
-            # 单句播放时间进度 (0.0 -> 1.0)
+            # 单句播放时间进度
             if current_line_obj:
                 dur = max(1000, current_line_obj.duration_ms)
                 line_r = min(1.0, max(0.0, (live_ms - current_line_obj.time_ms) / float(dur)))
@@ -707,7 +707,7 @@ class OverlayWidget(QWidget):
             else:
                 line_r = 0.0
 
-            # 绘制下方圆润胶囊进度条 (固定居中，不随文本偏移，可配置关闭)
+            # 绘制下方圆润胶囊进度条
             if self._show_line_progress:
                 bar_w = min(220.0, max(130.0, view_w * 0.45))
                 bar_h = 3.5
@@ -730,7 +730,7 @@ class OverlayWidget(QWidget):
                 fill_grad.setColorAt(1.0, QColor(160, 230, 255, int(alpha * 255)))
                 painter.fillPath(fill_path, QBrush(fill_grad))
 
-        # ── 4. 译文渲染（随主句同步平滑移动）──
+        # ── 4. 译文渲染 ──
         if has_trans:
             painter.setFont(self._font_sub)
             tr_w = fm_s.horizontalAdvance(trans)

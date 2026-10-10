@@ -1,17 +1,17 @@
 # 配置示例
 window:
-  mode: overlay  # 运行模式: overlay (桌面悬浮窗) 或 fullscreen
+  mode: overlay  # 运行模式: overlay 或 fullscreen
 
 overlay:
-  opacity: 0.85  # 悬浮窗背景透明度 (0.15 ~ 1.0)
-  x: -1          # 窗口 X 坐标 (-1 为系统默认居中)
+  opacity: 0.85  # 悬浮窗背景透明度: 0.15 ~ 1.0
+  x: -1          # 窗口 X 坐标，-1 为居中
   y: -1          # 窗口 Y 坐标
   w: 900         # 窗口宽度
   h: 130         # 窗口高度
 
 font:
-  size_current: 28  # 当前行歌词字号 (px)
-  size_context: 14  # 译文与上下文行字号 (px)
+  size_current: 28  # 当前行歌词字号
+  size_context: 14  # 译文与上下文行字号
   configs:          # 本地字体优先级与启用配置
     - family: "Zen Maru Gothic"
       enabled: true
@@ -20,15 +20,15 @@ font:
 
 lyrics:
   show_translation: true    # 是否显示双语翻译
-  show_romaji: false        # 是否显示罗马音 (支持网易云与 QQ 音乐)
-  secondary_mode: prefer_trans  # 悬浮窗副行偏好: prefer_trans (优先译文) / prefer_romaji (优先罗马音) / both (并排显示)
+  show_romaji: false        # 是否显示罗马音
+  secondary_mode: prefer_trans  # 悬浮窗副行偏好: prefer_trans / prefer_romaji / both
   show_line_progress: true  # 无逐字歌词时是否显示单句胶囊进度条
-  offset_ms: 0              # 全局歌词同步时间微调偏移 (毫秒, 正值提前, 负值延后)
-  parse_sections: true      # 是否开启段落与分段角色名解析 (隐藏标记行并将角色显示在翻译行)
+  offset_ms: 0              # 全局歌词同步时间微调偏移，毫秒
+  parse_sections: true      # 是否开启段落与分段角色名解析
 
 fullscreen:
-  context_lines: 5          # 全画幅模式上下文阶梯显示行数 (1 ~ 8)
+  context_lines: 5          # 全画幅模式上下文阶梯显示行数: 1 ~ 8
 
 smtc:
-  watched_apps:             # 监听的音乐软件进程列表 (留空为监听全部)
+  watched_apps:             # 监听的音乐软件进程列表，留空为监听全部
     - cloudmusic.exe

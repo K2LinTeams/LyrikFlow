@@ -47,7 +47,7 @@ env.bak/
 venv.bak/
 
 # -----------------------------------------------------------------------------
-# Database & Cache Data (SQLite, backups, WAL/SHM)
+# Database & Cache Data
 # -----------------------------------------------------------------------------
 *.db
 *.db-journal
@@ -62,7 +62,7 @@ data/*.db.*
 !data/.gitkeep
 
 # -----------------------------------------------------------------------------
-# Configuration Files (Local user preferences)
+# Configuration Files
 # -----------------------------------------------------------------------------
 config.yaml
 data/config.yaml
@@ -112,3 +112,4 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+scripts/

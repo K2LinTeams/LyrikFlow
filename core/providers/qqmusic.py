@@ -25,61 +25,186 @@ QQ_HEADERS = {
 }
 
 
+QQ_COMM_CONFIGS = [
+    {"ct": "26", "cv": "0", "uin": "0"},
+    {"ct": "19", "cv": "18030008", "uin": "0"},
+    {"ct": "6", "cv": "0", "uin": "0"},
+]
+
+
 class QQMusicLyricProvider(BaseLyricProvider):
     provider_name = "qqmusic"
 
-    def search_song(self, title: str, artist: str) -> Optional[SearchSongItem]:
-        keyword = f"{title} {artist}".strip()
-        search_body = {
-            "comm": {
-                "ct": "19",
-                "cv": "1859",
-                "uin": "0",
-            },
-            "req_1": {
-                "method": "DoSearchForQQMusicDesktop",
-                "module": "music.search.SearchCgiService",
-                "param": {
-                    "num_per_page": "20",
-                    "page_num": "1",
-                    "query": keyword,
-                    "search_type": 0,
+    def _generate_query_candidates(self, title: str, artist: str = "") -> list[str]:
+        variants: list[str] = []
+        t_raw = title.strip()
+        a_raw = artist.strip()
+
+        invalid_artists = {
+            "unknown", "unknown artist", "未知", "未知歌手", "群星",
+            "various artists", "佚名", "null", "none", "va",
+        }
+        if a_raw.lower() in invalid_artists:
+            a_raw = ""
+
+        # 1. 原始组合
+        primary = f"{t_raw} {a_raw}".strip()
+        if primary:
+            variants.append(primary)
+
+        # 2. 剥离文件扩展名
+        t_no_ext = re.sub(
+            r"\.(mp3|flac|wav|m4a|aac|ogg|ape|dsd|dff)$",
+            "",
+            t_raw,
+            flags=re.IGNORECASE,
+        ).strip()
+
+        # 3. 检查 ' - ' 分隔符
+        t_split = t_no_ext
+        a_extracted = a_raw
+        if " - " in t_no_ext:
+            parts = t_no_ext.split(" - ", 1)
+            if not a_extracted:
+                a_extracted = parts[0].strip()
+            t_split = parts[1].strip()
+
+        # 4. 清洗常见音质与版本干扰标签
+        t_clean = re.sub(
+            r"\[(FLAC|APE|WAV|MP3|320K|Hi-Res|无损|1080P|720P)\]",
+            "",
+            t_split,
+            flags=re.IGNORECASE,
+        )
+        t_clean = re.sub(
+            r"\((320k|128k|Hi-Res|无损|mp3|flac)\)",
+            "",
+            t_clean,
+            flags=re.IGNORECASE,
+        )
+        # 清洗 feat / with 合作歌手信息
+        t_clean = re.sub(r"(?:feat\.?|with)\s+.*", "", t_clean, flags=re.IGNORECASE).strip()
+
+        cand2 = f"{t_clean} {a_extracted}".strip()
+        if cand2 and cand2 not in variants:
+            variants.append(cand2)
+
+        # 5. 剥离所有括号内内容
+        t_core = re.sub(r"[\(\[（【].*?[\)\]）】]", "", t_clean).strip()
+        cand3 = f"{t_core} {a_extracted}".strip()
+        if cand3 and cand3 not in variants:
+            variants.append(cand3)
+
+        # 6. 仅纯核心歌名兜底
+        if t_core and t_core not in variants:
+            variants.append(t_core)
+
+        return variants
+
+    def _execute_search_raw(self, query: str, limit: int = 15) -> list[dict]:
+        """按优先级轮询客户端配置执行检索"""
+        for comm in QQ_COMM_CONFIGS:
+            search_body = {
+                "comm": comm,
+                "req_1": {
+                    "method": "DoSearchForQQMusicDesktop",
+                    "module": "music.search.SearchCgiService",
+                    "param": {
+                        "num_per_page": str(limit),
+                        "page_num": "1",
+                        "query": query,
+                        "search_type": 0,
+                    },
                 },
             }
-        }
+            try:
+                resp = requests.post(
+                    "https://u.y.qq.com/cgi-bin/musicu.fcg",
+                    json=search_body,
+                    headers=QQ_HEADERS,
+                    timeout=TIMEOUT,
+                )
+                if resp.status_code == 200:
+                    rj = resp.json()
+                    svc = rj.get("req_1") or rj.get("music.search.SearchCgiService") or {}
+                    # 若返回非 0 则尝试下一配置
+                    if svc.get("code") != 0:
+                        continue
+                    body = svc.get("data", {}).get("body", {})
+                    songs = body.get("song", {}).get("list", [])
+                    if songs:
+                        return songs
+                    # 若单曲列表为空
+                    for zd in body.get("zhida", {}).get("list", []):
+                        items = zd.get("track_list", {}).get("items", [])
+                        if items:
+                            return items
+            except Exception:
+                continue
+        return []
 
-        try:
-            resp = requests.post(
-                "https://u.y.qq.com/cgi-bin/musicu.fcg",
-                json=search_body,
-                headers=QQ_HEADERS,
-                timeout=TIMEOUT,
+    def search_song(self, title: str, artist: str, extra_artists: Optional[list[str]] = None) -> Optional[SearchSongItem]:
+        t_strip = title.strip()
+        if t_strip.isdigit() and len(t_strip) >= 4:
+            direct_item = SearchSongItem(
+                song_id=t_strip,
+                song_mid="",
+                title=t_strip,
+                artist=artist,
+                album="",
+                duration_ms=0,
+                pic_url=None,
+                sub_name="",
+                provider=self.provider_name,
             )
-            if resp.status_code == 200:
-                rj = resp.json()
-                svc = rj.get("req_1") or rj.get("music.search.SearchCgiService") or {}
-                songs = svc.get("data", {}).get("body", {}).get("song", {}).get("list", [])
-                if songs:
-                    ranked = self._rank_candidates(songs, title, artist)
-                    # 优先挑选：按相关度从高到低探测，如果最高候选本身没有歌词，则顺位回退到同曲目的其他候选
-                    for cand_song in ranked[:3]:
-                        item = self._parse_song_item(cand_song)
-                        lyr = self.get_lyrics(item)
-                        if lyr and (lyr.qrc or lyr.lrc):
-                            return item
-                    # 如果前几个候选都没有歌词，返回第一候选
-                    return self._parse_song_item(ranked[0])
-        except Exception:
-            pass
-        return None
+            lyr = self.get_lyrics(direct_item)
+            if lyr:
+                return direct_item
 
-    def _rank_candidates(self, songs: list[dict], title: str, artist: str) -> list[dict]:
+        candidates = self._generate_query_candidates(title, artist)
+        all_songs: list[dict] = []
+
+        for q in candidates:
+            raw_songs = self._execute_search_raw(q, limit=20)
+            if raw_songs:
+                all_songs = raw_songs
+                break
+
+        if not all_songs:
+            return None
+
+        ranked = self._rank_candidates(all_songs, title, artist, extra_artists=extra_artists)
+        if not ranked:
+            return None
+
+        # 优先挑选：按相关度从高到低探测，如果最高候选本身没有歌词，则顺位回退到同曲目的其他候选
+        for cand_song in ranked[:3]:
+            try:
+                item = self._parse_song_item(cand_song)
+                lyr = self.get_lyrics(item)
+                if lyr and (lyr.qrc or lyr.lrc):
+                    return item
+            except Exception:
+                pass
+        # 如果前几个候选都没有歌词，返回第一候选
+        try:
+            return self._parse_song_item(ranked[0])
+        except Exception:
+            return None
+
+    def _rank_candidates(
+        self,
+        songs: list[dict],
+        title: str,
+        artist: str,
+        extra_artists: Optional[list[str]] = None,
+    ) -> list[dict]:
         import difflib
         import unicodedata
 
-        # 常用中日/简繁同义转换表（音乐标题高频字归一化）
+        # 简繁同义转换表
         char_map = str.maketrans({
-            '愛': '爱', '葉': '叶', '樂': '乐', '風': '风', '聲': '声',
+            '愛': '爱', '葉': '叶', '乐': '乐', '風': '风', '聲': '声',
             '夢': '梦', '聽': '听', '戀': '恋', '時': '时', '會': '会',
             '過': '过', '語': '语', '話': '话', '傳': '传', '說': '说',
             '傷': '伤', '點': '点', '頭': '头', '單': '单', '雙': '双',
@@ -100,7 +225,19 @@ class QQMusicLyricProvider(BaseLyricProvider):
             s = re.sub(r"[^\w\u4e00-\u9fa5]+", "", s)
             return s
 
-        # 1. 构建目标歌手池（主歌手 + 标题括号内合作歌手）
+        def safe_artist_match(t_art: str, c_art: str) -> bool:
+            """安全歌手匹配，避免如 'kz' 子串盲目命中 'kztandingan'"""
+            if not t_art or not c_art:
+                return False
+            if t_art == c_art:
+                return True
+            # 短缩写（<=3 字符，如 kz, iu, dj, mc, an）必须全等匹配
+            if len(t_art) <= 3 or len(c_art) <= 3:
+                return t_art == c_art
+            # 较长字符串允许包含
+            return t_art in c_art or c_art in t_art
+
+        # 1. 构建目标歌手池
         target_artists: set[str] = set()
         if artist.strip():
             for p in re.split(r"[/&,、+，]|feat\.?|with", artist.lower()):
@@ -108,7 +245,15 @@ class QQMusicLyricProvider(BaseLyricProvider):
                 if p_norm:
                     target_artists.add(p_norm)
 
-        # 提取标题括号中的合作者（如 (鹿乃xLONxHanser)）
+        if extra_artists:
+            for extra in extra_artists:
+                if extra and extra.strip():
+                    for p in re.split(r"[/&,、+，]|feat\.?|with", extra.lower()):
+                        p_norm = normalize_str(p.strip(), strip_brackets=False)
+                        if p_norm:
+                            target_artists.add(p_norm)
+
+        # 提取标题括号中的合作者
         for b in re.findall(r"[\(\[（【](.*?)[\)\]）】]", title):
             for p in re.split(r"[xX/&,、+，]|feat\.?|with", b):
                 p_norm = normalize_str(p.strip(), strip_brackets=False)
@@ -126,22 +271,28 @@ class QQMusicLyricProvider(BaseLyricProvider):
             c_raw = s_name.lower().strip()
 
             # 1. 标题相似度
+            is_title_contained = (t_clean in c_clean or c_clean in t_clean) if (t_clean and c_clean) else False
             if not t_clean or not c_clean:
                 t_sim = difflib.SequenceMatcher(None, t_raw, c_raw).ratio()
             elif t_clean == c_clean:
                 t_sim = 1.0
-            elif t_clean in c_clean or c_clean in t_clean:
-                t_sim = 0.88
+            elif is_title_contained:
+                shorter, longer = (len(t_clean), len(c_clean)) if len(t_clean) <= len(c_clean) else (len(c_clean), len(t_clean))
+                len_ratio = shorter / longer if longer > 0 else 0
+                t_sim = 0.90 if len_ratio >= 0.5 else 0.75
             else:
                 t_sim = max(
                     difflib.SequenceMatcher(None, t_raw, c_raw).ratio(),
                     difflib.SequenceMatcher(None, t_clean, c_clean).ratio(),
                 )
 
+            # 【硬性门槛】歌名相似度过低且互不包含，绝不可能是目标歌曲（彻底杜绝 Reply 匹配到 Real Gone）
+            if t_sim < 0.60 and not is_title_contained:
+                continue
+
             # 2. 歌手相似度
             singers = [sg.get("name", "") for sg in s.get("singer", []) if sg.get("name")]
             cand_artists = [normalize_str(sg, strip_brackets=False) for sg in singers if sg]
-            cand_full = "/".join(cand_artists)
 
             if not target_artists:
                 a_sim = 1.0
@@ -150,36 +301,42 @@ class QQMusicLyricProvider(BaseLyricProvider):
                 for ta in target_artists:
                     if not ta:
                         continue
-                    if any(ta == ca or ta in ca or ca in ta for ca in cand_artists) or ta in cand_full:
+                    if any(safe_artist_match(ta, ca) for ca in cand_artists):
                         hit_count += 1
 
                 if hit_count > 0:
                     a_sim = min(1.0, 0.70 + 0.15 * hit_count)
-                    # 主歌手精准命中直接拉满
                     a_main = normalize_str(artist, strip_brackets=False)
-                    if a_main and any(a_main == ca for ca in cand_artists):
+                    if a_main and any(safe_artist_match(a_main, ca) for ca in cand_artists):
                         a_sim = 1.0
                 else:
-                    # 歌手未直接命中，计算模糊比例并给予大幅折扣
                     best_cand_ratio = 0.0
                     for ta in target_artists:
                         for ca in cand_artists:
                             r = difflib.SequenceMatcher(None, ta, ca).ratio()
                             if r > best_cand_ratio:
                                 best_cand_ratio = r
-                    a_sim = best_cand_ratio * 0.45
+                    a_sim = best_cand_ratio * 0.40
 
-            score = t_sim * 0.55 + a_sim * 0.45
-            if target_artists and a_sim < 0.35:
-                score *= 0.45
+            # 歌名权重占 70%，歌手权重占 30%
+            score = t_sim * 0.70 + a_sim * 0.30
+            # 只有歌名非完全一致且歌手相似度很低时才轻微打折
+            if target_artists and a_sim < 0.30 and t_sim < 0.90:
+                score *= 0.60
 
             scored.append((score, s))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [s for _, s in scored]
 
-    def _pick_best_song(self, songs: list[dict], title: str, artist: str) -> Optional[SearchSongItem]:
-        ranked = self._rank_candidates(songs, title, artist)
+    def _pick_best_song(
+        self,
+        songs: list[dict],
+        title: str,
+        artist: str,
+        extra_artists: Optional[list[str]] = None,
+    ) -> Optional[SearchSongItem]:
+        ranked = self._rank_candidates(songs, title, artist, extra_artists=extra_artists)
         return self._parse_song_item(ranked[0]) if ranked else None
 
     def _parse_song_item(self, best: dict) -> SearchSongItem:
@@ -193,17 +350,17 @@ class QQMusicLyricProvider(BaseLyricProvider):
         s_album = album_obj.get("name") or album_obj.get("title") or ""
         album_mid = album_obj.get("mid") or ""
 
-        # QQ 音乐 500x500 高清封面 URL 结构
+        # QQ 音乐 封面
         pic_url = None
         if album_mid:
             pic_url = f"https://y.gtimg.cn/music/photo_new/T002R500x500M000{album_mid}.jpg"
 
-        # 检查副标题（包括原版 subtitle，以及在 name/title 携带的中文译名）
+        # 检查副标题
         sub_name = best.get("subtitle") or ""
         if not sub_name:
             t_full = best.get("title") or ""
             t_name = best.get("name") or ""
-            # 如果 title 形如 "アイドル (偶像)" 而 name 是 "アイドル"，提取括号内的译名作为 sub_name
+            # 提取副标题或括号内的译名作为 sub_name
             if t_full and t_name and t_full != t_name and t_full.startswith(t_name):
                 m = re.search(r"\((.*?)\)|（(.*?)）", t_full[len(t_name):])
                 if m:
@@ -215,49 +372,30 @@ class QQMusicLyricProvider(BaseLyricProvider):
             title=s_name,
             artist=s_artist,
             album=s_album,
-            duration_ms=int(best.get("interval", 0)) * 1000,
+            duration_ms=int(best.get("interval") or 0) * 1000,
             pic_url=pic_url,
             sub_name=sub_name,
             provider=self.provider_name,
         )
 
     def search_songs(self, title: str, artist: str = "", limit: int = 15) -> list[SearchSongItem]:
-        keyword = f"{title} {artist}".strip()
-        search_body = {
-            "comm": {
-                "ct": "19",
-                "cv": "1859",
-                "uin": "0",
-            },
-            "req_1": {
-                "method": "DoSearchForQQMusicDesktop",
-                "module": "music.search.SearchCgiService",
-                "param": {
-                    "num_per_page": str(limit),
-                    "page_num": "1",
-                    "query": keyword,
-                    "search_type": 0,
-                },
-            }
-        }
+        candidates = self._generate_query_candidates(title, artist)
+        all_songs: list[dict] = []
+
+        for q in candidates:
+            raw_songs = self._execute_search_raw(q, limit=limit)
+            if raw_songs:
+                all_songs = raw_songs
+                break
+
         results: list[SearchSongItem] = []
-        try:
-            resp = requests.post(
-                "https://u.y.qq.com/cgi-bin/musicu.fcg",
-                json=search_body,
-                headers=QQ_HEADERS,
-                timeout=TIMEOUT,
-            )
-            if resp.status_code == 200:
-                rj = resp.json()
-                svc = rj.get("req_1") or rj.get("music.search.SearchCgiService") or {}
-                songs = svc.get("data", {}).get("body", {}).get("song", {}).get("list", [])
-                for s in songs:
-                    item = self._parse_song_item(s)
-                    if item.song_id or item.song_mid:
-                        results.append(item)
-        except Exception:
-            pass
+        for s in all_songs:
+            try:
+                item = self._parse_song_item(s)
+                if item.song_id or item.song_mid:
+                    results.append(item)
+            except Exception:
+                continue
 
         if not results:
             single = self.search_song(title, artist)
@@ -309,7 +447,7 @@ class QQMusicLyricProvider(BaseLyricProvider):
                 pass
 
         # 2. 尝试从 fcg_query_lyric_new.fcg 获取标准 LRC 兜底与译文
-        if song_mid:
+        if song_mid and (not qrc_text or not trans_text):
             try:
                 params = {
                     "songmid": song_mid,
@@ -325,7 +463,11 @@ class QQMusicLyricProvider(BaseLyricProvider):
                     timeout=TIMEOUT,
                 )
                 if resp.status_code == 200:
-                    rj = resp.json()
+                    try:
+                        rj = resp.json()
+                    except Exception:
+                        m = re.search(r"^\w+\s*\((.*)\)\s*$", resp.text.strip(), re.DOTALL)
+                        rj = json.loads(m.group(1)) if m else {}
                     b64_lrc = rj.get("lyric", "")
                     b64_trans = rj.get("trans", "")
                     if b64_lrc:

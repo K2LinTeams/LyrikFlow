@@ -29,7 +29,7 @@ except ImportError:
     from providers.base import SearchSongItem
 
 
-# ── MD3 全局样式表构建器（蓝白系配色 + 动态注入自定义字体族名栈）─────────────
+# ── MD3 全局样式表构建器 ──────────────────────────────────────
 def build_dialog_stylesheet(font_css: str = "") -> str:
     if not font_css:
         font_css = font_manager.get_font_css_family()
@@ -359,7 +359,7 @@ class ApplyVersionWorker(QThread):
             self.apply_finished.emit(False, str(e), None)
 
 
-# ── MD3 规范圆润开关控件 (跑道形轨道 + 圆形滑块) ──────────────────────────────
+# ── MD3 颜色插值辅助 ──────────────────────────────────────────
 def _lerp_color(c1: QColor, c2: QColor, t: float) -> QColor:
     t = max(0.0, min(1.0, float(t)))
     r = int(c1.red() + (c2.red() - c1.red()) * t)
@@ -368,12 +368,12 @@ def _lerp_color(c1: QColor, c2: QColor, t: float) -> QColor:
     return QColor(r, g, b)
 
 
-# ── MD3 规范圆润开关控件 (跑道形轨道 + 圆形滑块) ──────────────────────────────
+# ── MD3 规范圆润开关控件 ──────────────────────────────────────
 class MD3Switch(QAbstractButton):
     """
     Material Design 3 原生风格胶囊开关
-    - 开启：高对比度 Google 蓝 (#0B57D0) 轨道 + 纯白圆形滑块
-    - 关闭：柔和浅灰蓝 (#E1E6EE) 轨道 + 深灰蓝 (#535F70) 圆形滑块
+    - 开启：高对比度 Google 蓝轨道 + 纯白圆形滑块
+    - 关闭：柔和浅灰蓝轨道 + 深灰蓝圆形滑块
     - 联动平滑缓动动画与渐变色插值，避免残影与点击不同步
     """
     def __init__(self, parent=None):
@@ -450,7 +450,7 @@ class MD3Switch(QAbstractButton):
         painter.setBrush(track_color)
         painter.drawRoundedRect(track_rect, 12.0, 12.0)
 
-        # 圆形滑块插值位置 (0.0 -> 左侧，1.0 -> 右侧)
+        # 圆形滑块插值位置
         start_x = track_rect.left() + 2.5
         end_x = track_rect.right() - 21.5
         cur_x = start_x + (end_x - start_x) * t
@@ -652,7 +652,7 @@ class SettingsDialog(QDialog):
     # ── 标题栏按住拖拽移动窗口 ─────────────────────────────────────────────
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            # 顶部 Header 区域 (y <= 90) 支持鼠标拖拽移动无边框窗口
+            # 顶部 Header 区域支持鼠标拖拽移动无边框窗口
             if event.pos().y() <= 90:
                 self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
                 event.accept()
@@ -676,7 +676,7 @@ class SettingsDialog(QDialog):
         outer_layout.setContentsMargins(14, 14, 14, 14)
         outer_layout.setSpacing(0)
 
-        # 2. 核心主卡片背景 (带现代圆角、描边与柔和投影)
+        # 2. 核心主卡片背景
         self._main_card = QFrame(self)
         self._main_card.setObjectName("main_card")
         self._main_card.setStyleSheet("""
@@ -700,7 +700,7 @@ class SettingsDialog(QDialog):
         root.setContentsMargins(24, 20, 24, 20)
         root.setSpacing(16)
 
-        # 顶部 Header (图标、标题、副标题、关闭按钮)
+        # 顶部 Header
         header = QHBoxLayout()
         header.setSpacing(14)
 
@@ -754,14 +754,14 @@ class SettingsDialog(QDialog):
 
         root.addWidget(nav_container)
 
-        # 多页内容容器 (QStackedWidget)
+        # 多页内容容器
         self._stack = QStackedWidget()
         self._stack.addWidget(self._create_font_page())
         self._stack.addWidget(self._make_scrollable(self._create_ui_page()))
         self._stack.addWidget(self._make_scrollable(self._create_smtc_page()))
         root.addWidget(self._stack, 1)
 
-        # 底部动作栏 (恢复默认、取消、保存并应用)
+        # 底部动作栏
         footer = QHBoxLayout()
         footer.setSpacing(12)
 
@@ -1038,7 +1038,7 @@ class SettingsDialog(QDialog):
 
         cl.addLayout(row1)
 
-        # 实时字体预览栏 (使用该字体渲染一段效果文字)
+        # 实时字体预览栏
         preview_box = QFrame()
         preview_box.setStyleSheet(
             f"background: {'#F8FAFD' if item.enabled else '#F0F3F7'}; "
@@ -1181,7 +1181,7 @@ class SettingsDialog(QDialog):
         r2.addStretch()
         fl.addLayout(r2)
 
-        # 实时字号排版预览卡片 (放大视窗高度并保留纯净双行展示)
+        # 实时字号排版预览卡片
         self._preview_card = QFrame()
         self._preview_card.setObjectName("preview_card")
         self._preview_card.setMinimumHeight(135)
@@ -1240,7 +1240,7 @@ class SettingsDialog(QDialog):
         trans_l.addWidget(self._switch_trans)
         l.addWidget(card_trans)
 
-        # 4. 功能开关卡片：罗马音 (Romaji)
+        # 4. 功能开关卡片：罗马音
         card_roma = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
         roma_l = QHBoxLayout(card_roma)
         roma_l.setContentsMargins(18, 14, 18, 14)
@@ -1371,7 +1371,7 @@ class SettingsDialog(QDialog):
         csl.addLayout(row_stat)
         cl.addWidget(card_status)
 
-        # 3. 搜索控制栏 (输入框 + 音源切换 Chip + 搜索按钮)
+        # 3. 搜索控制栏
         search_v = QVBoxLayout()
         search_v.setSpacing(8)
 
@@ -1700,9 +1700,9 @@ class SettingsDialog(QDialog):
                 # 1. 立即通知 controller 重新解析并推送到桌面悬浮窗和全屏
                 if self._controller and hasattr(self._controller, "_reload_current_song_lyrics"):
                     self._controller._reload_current_song_lyrics()
-                # 2. 刷新设置面板顶部徽标（提供源 - 动态/标准）
+                # 2. 刷新设置面板顶部徽标
                 self._refresh_override_status_badge()
-                # 3. 刷新列表项按钮（变为“当前已选 ✓”并高亮）
+                # 3. 刷新列表项按钮
                 if self._displayed_search_results:
                     self._render_search_results(self._displayed_search_results)
                 elif self._last_search_results:

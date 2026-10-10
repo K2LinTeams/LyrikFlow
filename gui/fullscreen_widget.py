@@ -53,7 +53,7 @@ class LyricsCanvas(QWidget):
         self._base_wall_time: float = time.monotonic()
         self._is_playing: bool = True
         self._is_verbatim_song: bool = False
-        self._scroll_offset: float = 0.0      # 当前绘制偏移（像素）
+        self._scroll_offset: float = 0.0      # 当前绘制偏移
         self._target_offset: float = 0.0
         self._show_translation = settings.get_show_translation()
         self._show_romaji = settings.get_show_romaji()
@@ -68,7 +68,7 @@ class LyricsCanvas(QWidget):
         self._font_trans_cur  = _make_font(max(12, int(cur_sz * 0.6)), bold=False)
         self._font_trans_ctx  = _make_font(max(10, int(ctx_sz * 0.8)), bold=False)
 
-        # 60FPS 连续渲染与缓动滚动驱动计时器 (必须在 __init__ 启动)
+        # 60FPS 连续渲染与缓动滚动驱动计时器
         self._anim_timer = QTimer(self)
         self._anim_timer.setInterval(16)  # ~60fps
         self._anim_timer.timeout.connect(self._on_anim_tick)
@@ -269,7 +269,7 @@ class LyricsCanvas(QWidget):
 
             dist = abs(i - cur)
 
-            # ── 1. 距离基础不透明度 (基于用户配置的显示数量，平滑非线性渐隐衰减) ──
+            # ── 1. 距离基础不透明度 ──
             max_ctx = max(1, self._context_lines)
             if dist == 0:
                 base_alpha = 255
@@ -279,7 +279,7 @@ class LyricsCanvas(QWidget):
             else:
                 base_alpha = 0
 
-            # ── 2. 视口边缘自然渐隐 (顶部/底部淡出，不遮挡封面和快捷键) ──
+            # ── 2. 视口边缘自然渐隐 ──
             line_mid = y + lh * 0.5
             fade_factor = 1.0
             if line_mid < 170.0:
@@ -353,7 +353,7 @@ class LyricsCanvas(QWidget):
                 painter.setPen(QColor(255, 255, 255, final_alpha))
                 painter.drawText(tx, int(y + fm.ascent()), elided)
 
-            # ── 副行绘制（三行布局：主歌词 + 罗马音 + 译文）──
+            # ── 副行绘制 ──
             has_ro = bool(self._show_romaji and line.romaji.strip())
             has_tr = bool(self._show_translation and line.translation.strip())
             tfnt = self._font_trans_cur if dist == 0 else self._font_trans_ctx
@@ -373,7 +373,7 @@ class LyricsCanvas(QWidget):
                 sub_y += tfm.height() + 6
 
             if has_tr:
-                # 绘制中文译文（第二副行，柔和副白）
+                # 绘制中文译文
                 tr_text = line.translation.strip()
                 te = tfm.elidedText(tr_text, Qt.TextElideMode.ElideRight, w - 80)
                 ttx = (w - tfm.horizontalAdvance(te)) // 2
@@ -414,12 +414,12 @@ class FullscreenWidget(QWidget):
         self._elapsed_ms: int = 0
         self._total_ms: int = 0
 
-        # 环境光晕三点采样色彩（降级备用）
+        # 环境光晕三点采样色彩
         self._ambient_col_center = QColor(165, 145, 160)
         self._ambient_col_left   = QColor(135, 110, 115)
         self._ambient_col_right  = QColor(90, 100, 130)
 
-        # 高斯模糊背景图缓存系统 (基于专辑封面渲染，支持切歌平滑淡入淡出)
+        # 高斯模糊背景图缓存系统
         self._curr_bg_pixmap: Optional[QPixmap] = None
         self._prev_bg_pixmap: Optional[QPixmap] = None
         self._bg_crossfade: float = 1.0
@@ -438,7 +438,7 @@ class FullscreenWidget(QWidget):
         # 歌词画布
         self._canvas = LyricsCanvas(self)
 
-        # 封面加载动画状态 (0.0 ~ 1.0)
+        # 封面加载动画状态
         self._loading_progress: float = 1.0
         self._target_loading_progress: float = 1.0
         self._loading_spinner_angle: float = 0.0
@@ -655,7 +655,7 @@ class FullscreenWidget(QWidget):
         else:
             self._bg_crossfade = 1.0
 
-        # 封面高清替换平滑交叉淡入 (Crossfade)
+        # 封面高清平滑淡入
         if self._thumb_crossfade < 1.0:
             diff_cf = 1.0 - self._thumb_crossfade
             if diff_cf > 0.01:
@@ -788,7 +788,7 @@ class FullscreenWidget(QWidget):
             painter.drawPixmap(int(glow_rect.x()), int(glow_rect.y()), glow_pix)
             painter.restore()
 
-            # 圆角封面（支持无缝 Crossfade）
+            # 圆角封面
             path = QPainterPath()
             path.addRoundedRect(cover_rect, 12.0, 12.0)
             painter.save()

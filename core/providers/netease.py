@@ -205,7 +205,7 @@ class NeteaseLyricProvider(BaseLyricProvider):
 
     def get_lyrics(self, song_item: SearchSongItem) -> Optional[RawLyricResult]:
         song_id = song_item.song_id
-        # 1. 优先调用 EAPI /song/lyric/v1 (支持 YRC 逐字)
+        # 1. 优先调用 EAPI /song/lyric/v1
         try:
             url_path = "/api/song/lyric/v1"
             api_url = "https://interface3.music.163.com/eapi/song/lyric/v1"

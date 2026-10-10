@@ -31,14 +31,14 @@ class SMTCListener(QThread):
         self._state_lock = threading.RLock()
 
         self._is_playing = False
-        self._play_start_wall: float = 0.0      # 单调时钟基准（秒）
-        self._offset_ms: int = 0                # 手动偏移（毫秒）
-        self._elapsed_when_paused: int = 0      # 暂停时的进度（毫秒）
+        self._play_start_wall: float = 0.0      # 单调时钟基准
+        self._offset_ms: int = 0                # 手动偏移
+        self._elapsed_when_paused: int = 0      # 暂停时的进度
         self._last_title: str = ""
         self._last_artist: str = ""
         self._last_state: Optional[bool] = None
         self._has_native_timeline: bool = False  # 是否支持原生时间轴
-        self._native_duration_ms: int = 0        # 原生音轨总时长（毫秒）
+        self._native_duration_ms: int = 0        # 原生音轨总时长
         self._startup_initialized: bool = False  # 首次初始化标志
 
         # 会话与事件相关句柄
@@ -91,8 +91,8 @@ class SMTCListener(QThread):
             )
 
         self._loop = asyncio.get_running_loop()
-        tick_interval = 0.15       # 进度更新间隔（秒）
-        watchdog_interval = 1.0   # 会话保查看门狗间隔（秒）
+        tick_interval = 0.15       # 进度更新间隔
+        watchdog_interval = 1.0   # 会话保查看门狗间隔
 
         manager = await MediaManager.request_async()
         self._manager = manager
@@ -369,11 +369,13 @@ class SMTCListener(QThread):
                     emit_needed = False
 
             if emit_needed:
-                thumb_bytes = await self._fetch_thumbnail(props)
-                self.song_changed.emit(title, artist, thumb_bytes)
+                # 必须先同步并校准真实时间轴基准，确保外部接收 song_changed 时读取到的 SMTC 时钟已处于准确状态
                 with self._state_lock:
                     cur_playing = self._is_playing
                 self._sync_timeline(session, cur_playing, song_just_changed=True)
+
+                thumb_bytes = await self._fetch_thumbnail(props)
+                self.song_changed.emit(title, artist, thumb_bytes)
 
     def _sync_timeline(self, session, is_playing: bool, song_just_changed: bool = False) -> None:
         """同步时间轴状态并校准时钟基准"""
@@ -402,10 +404,9 @@ class SMTCListener(QThread):
                     self.tick.emit(self._get_elapsed_ms_locked())
                 return
 
-            # 原生时间轴模式：结合 last_updated_time 外推当前进度
+            # 原生时间轴
             native_current_s = pos_s
-            # 切歌且处于初始阶段时不累加可能属于上一首歌的历史 age_s
-            if is_playing and last_updated and not (song_just_changed and pos_s < 1.0):
+            if is_playing and last_updated and not song_just_changed and pos_s >= 3.0:
                 age_s = self._get_age_seconds(last_updated)
                 if 0.0 <= age_s <= 30.0:
                     native_current_s += age_s
@@ -418,7 +419,7 @@ class SMTCListener(QThread):
             local_raw_ms = self._get_raw_elapsed_ms_locked()
             diff_ms = abs(native_pos_ms - local_raw_ms)
 
-            # 切歌或进度偏移超过阈值（如 Seek）时校准基准时钟
+            # 切歌或进度偏移超过阈值时校准基准时钟
             if song_just_changed or diff_ms > 300:
                 if is_playing:
                     self._play_start_wall = now_mono - native_current_s

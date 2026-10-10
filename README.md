@@ -8,7 +8,7 @@
 # 安装依赖
 pip install PyQt6 PyQt6-Frameless-Window winsdk requests
 
-# 启动（需用 64 位 CPython 3.9+，非 MSYS2 版本）
+# 启动
 python main.py
 ```
 
@@ -37,7 +37,7 @@ LyrikFlow/
 ├── core/                  # 核心业务逻辑模块
 │   ├── smtc_listener.py   # SMTC 媒体监听线程
 │   ├── smtc_probe.py      # SMTC 调试探针
-│   ├── lyrics_fetcher.py  # 歌词获取（网易云 eapi / LRCLIB）
+│   ├── lyrics_fetcher.py  # 歌词获取与多源聚合
 │   ├── lyrics_parser.py   # LRC / YRC 逐字歌词解析器
 │   ├── font_manager.py    # 字体扫描、优先级与回退栈
 │   ├── db_cache.py        # SQLite 本地缓存管理
@@ -48,7 +48,7 @@ LyrikFlow/
 │   ├── fullscreen_widget.py# 全画幅沉浸式歌词组件
 │   └── settings_dialog.py # MD3 风格设置面板
 ├── data/                  # 本地数据持久化目录
-│   ├── fonts/             # 本地字体目录（.ttf / .otf）
+│   ├── fonts/             # 本地字体目录
 │   └── lyrikflow_cache.db # SQLite 缓存数据库
 ├── main.py                # 程序入口
 ├── run.bat                # Windows 启动脚本

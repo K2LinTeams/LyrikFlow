@@ -10,15 +10,15 @@ from typing import Optional
 @dataclass
 class SearchSongItem:
     """搜索匹配到的单曲元信息"""
-    song_id: str                      # 平台歌曲唯一 ID (网易云 id, QQ 音乐 numeric musicid / mid)
+    song_id: str                      # 平台歌曲唯一 ID
     title: str                        # 歌名
     artist: str                       # 歌手
     album: str = ""                   # 专辑名
-    duration_ms: int = 0              # 时长 (毫秒)
+    duration_ms: int = 0              # 时长，毫秒
     pic_url: Optional[str] = None     # 封面链接
     sub_name: str = ""                # 别名/副标题
-    provider: str = ""                # 提供源标识 (netease, qqmusic, lrclib)
-    song_mid: str = ""                # QQ 音乐专属 string mid (如 001p3V4c0PQdmd)
+    provider: str = ""                # 提供源标识
+    song_mid: str = ""                # QQ 音乐专属 string mid
 
     def to_dict(self) -> dict:
         return {

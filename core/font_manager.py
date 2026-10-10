@@ -37,7 +37,7 @@ class FontItem:
     total_size: int = 0              # 字节总大小
     enabled: bool = True             # 是否启用
     is_valid: bool = True            # 文件是否存在且加载成功
-    error_msg: str = ""              # 错误详情（如有）
+    error_msg: str = ""              # 错误详情
 
 
 _CACHED_ITEMS: list[FontItem] = []
@@ -96,7 +96,7 @@ def scan_fonts() -> list[FontItem]:
     if not candidate_dirs:
         candidate_dirs = [get_fonts_dir()]
 
-    # 收集磁盘上的字体文件 (文件名小写去重，以高优先级目录为准)
+    # 收集磁盘上的字体文件
     found_files: dict[str, str] = {}  # fname_lower -> fpath
     for d in candidate_dirs:
         try:
@@ -181,7 +181,7 @@ def scan_fonts() -> list[FontItem]:
     ordered_items: list[FontItem] = []
     processed_families: set[str] = set()
 
-    # 匹配字体项（支持精确匹配、忽略大小写匹配与文件名匹配）
+    # 匹配字体项
     def find_item_for_family(target_name: str) -> Optional[FontItem]:
         if target_name in family_map:
             return family_map[target_name]
@@ -331,7 +331,7 @@ def get_font_sample_text(family: str) -> str:
     f.setStyleStrategy(QFont.StyleStrategy.NoFontMerging)
     fm = QFontMetrics(f)
 
-    # 优先级候选样本文本（按完整字形覆盖率测试）
+    # 优先级候选样本文本
     candidates: list[str] = [
         "风吹过海面的声音，像是一首未完成的歌 1234 ABC",
         "不可解で不完全な魔法 · 風が海を渡る音 1234 ABC",

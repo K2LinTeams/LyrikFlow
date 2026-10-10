@@ -17,7 +17,7 @@ except ImportError:
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "lyrikflow_cache.db")
-MAX_DB_CACHE_ENTRIES = 2000  # 本地 SQLite 歌词缓存最大歌曲数（按 last_accessed 自动淘汰最旧数据）
+MAX_DB_CACHE_ENTRIES = 2000  # 本地 SQLite 歌词缓存最大歌曲数
 
 _lock = threading.Lock()
 

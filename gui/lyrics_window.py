@@ -32,9 +32,9 @@ except ImportError:
 # ── 后台歌词获取线程 ──────────────────────────────────────────────────────────
 class FetchThread(QThread):
     progress_changed = pyqtSignal(float)
-    sub_name_ready   = pyqtSignal(str, str, str)          # (title, artist, sub_name)
-    cover_ready      = pyqtSignal(str, str, object)       # (title, artist, hd_cover)
-    done             = pyqtSignal(object, str, str, object, str)  # (lyrics, title, artist, hd_cover, sub_name)
+    sub_name_ready   = pyqtSignal(str, str, str)          # title, artist, sub_name
+    cover_ready      = pyqtSignal(str, str, object)       # title, artist, hd_cover
+    done             = pyqtSignal(object, str, str, object, str)  # lyrics, title, artist, hd_cover, sub_name
 
     def __init__(self, title: str, artist: str, parent=None):
         super().__init__(parent)
@@ -61,7 +61,7 @@ class FetchThread(QThread):
             self.done.emit(cached["parsed"], self._title, self._artist, hd_cover, sub_name)
             return
 
-        # 多源解析管线 (网易云 -> QQ音乐 -> LRCLIB)
+        # 多源解析管线
         parsed, hd_cover, sub_name = lyrics_fetcher.fetch_lyrics_multi(
             title=self._title,
             artist=self._artist,
@@ -106,7 +106,7 @@ class LyricsWindow(QObject):
         self.smtc.tick.connect(self._on_tick)
         self.smtc.start()
 
-        # ── 初始显示（延迟一帧，确保 event loop 已启动）──────────────────
+        # ── 初始显示 ──────────────────────────────────────────────────
         QTimer.singleShot(0, self._apply_mode)
 
     # ── 模式切换 ─────────────────────────────────────────────────────────────
@@ -225,8 +225,6 @@ class LyricsWindow(QObject):
             self._thumb_bytes = bytes(hd_cover)
             self._overlay.update_hd_cover(hd_cover)
             self._fullscreen.update_hd_cover(hd_cover)
-            self._overlay.set_target_loading_progress(1.0)
-            self._fullscreen.set_target_loading_progress(1.0)
 
     def _on_lyrics_fetched(
         self,
@@ -240,7 +238,7 @@ class LyricsWindow(QObject):
             return
         self._lyrics = lyrics
 
-        # 将副名称（别名/翻译名称）拼接到歌手行
+        # 将副名称拼接到歌手行
         display_title = title
         display_artist = artist
         if sub_name and sub_name.lower() not in artist.lower() and sub_name.lower() not in title.lower():
@@ -334,7 +332,7 @@ class LyricsWindow(QObject):
 
     # ── 系统托盘 ─────────────────────────────────────────────────────────────
     def _setup_tray(self) -> QSystemTrayIcon:
-        # 绘制托盘图标 (64x64)
+        # 绘制托盘图标
         icon_px = QPixmap(64, 64)
         icon_px.fill(QColor(0, 0, 0, 0))
         p = QPainter(icon_px)
