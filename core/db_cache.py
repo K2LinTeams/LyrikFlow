@@ -20,11 +20,16 @@ try:
     DATA_DIR = settings.DATA_DIR
 except Exception:
     import sys
-    BASE_DIR = (
-        os.path.dirname(os.path.abspath(sys.executable))
-        if (getattr(sys, "frozen", False) or "__compiled__" in globals())
-        else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    )
+    nuitka_bin = os.environ.get("NUITKA_ONEFILE_BINARY")
+    if nuitka_bin:
+        BASE_DIR = os.path.dirname(os.path.abspath(nuitka_bin))
+    elif getattr(sys, "frozen", False) or "__compiled__" in globals() or hasattr(sys, "_MEIPASS"):
+        if sys.argv and sys.argv[0] and os.path.isfile(os.path.abspath(sys.argv[0])):
+            BASE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+        else:
+            BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     DATA_DIR = os.path.join(BASE_DIR, "data")
 
 DB_PATH = os.path.join(DATA_DIR, "lyrikflow_cache.db")

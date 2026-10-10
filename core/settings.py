@@ -13,9 +13,15 @@ import yaml
 
 # 项目根目录与配置文件路径
 def get_base_dir() -> str:
-    """获取根目录"""
-    if getattr(sys, "frozen", False) or "__compiled__" in globals():
+    nuitka_bin = os.environ.get("NUITKA_ONEFILE_BINARY")
+    if nuitka_bin:
+        return os.path.dirname(os.path.abspath(nuitka_bin))
+
+    if getattr(sys, "frozen", False) or "__compiled__" in globals() or hasattr(sys, "_MEIPASS"):
+        if sys.argv and sys.argv[0] and os.path.isfile(os.path.abspath(sys.argv[0])):
+            return os.path.dirname(os.path.abspath(sys.argv[0]))
         return os.path.dirname(os.path.abspath(sys.executable))
+
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 BASE_DIR = get_base_dir()
