@@ -37,9 +37,10 @@ class SMTCListener(QThread):
         self._last_title: str = ""
         self._last_artist: str = ""
         self._last_state: Optional[bool] = None
-        self._has_native_timeline: bool = False  # 是否支持原生时间轴
-        self._native_duration_ms: int = 0        # 原生音轨总时长
-        self._startup_initialized: bool = False  # 首次初始化标志
+        self._has_native_timeline: bool = False
+        self._native_duration_ms: int = 0
+        self._startup_initialized: bool = False
+        self._pending_play_baseline: bool = False
 
         # 会话与事件相关句柄
         self._manager: Any = None
@@ -174,8 +175,24 @@ class SMTCListener(QThread):
             pass
         return None
 
+    def _session_has_timestamps(self, session, tl=None) -> bool:
+        if not session:
+            return False
+        app_id = (getattr(session, "source_app_user_model_id", "") or "").lower()
+        if any(k in app_id for k in ("cloudmusic", "netease", "orpheus")):
+            return False
+        if tl is None:
+            try:
+                tl = session.get_timeline_properties()
+            except Exception:
+                tl = None
+        end_s = self._td_to_seconds(getattr(tl, "end_time", None)) if tl else 0.0
+        return end_s > 0.0
+
     def _detach_current_session(self) -> None:
         """注销当前会话的事件回调"""
+        with self._state_lock:
+            self._pending_play_baseline = False
         s = self._current_session
         if s:
             if self._tok_pb is not None:
@@ -302,8 +319,6 @@ class SMTCListener(QThread):
                 return
             st = pb.playback_status
             # 状态映射: 4 = Playing, 5 = Paused, 3 = Stopped, 0 = Closed, 2 = Changing
-            if st == 2:
-                return
             is_playing = (st == 4)
         except Exception:
             return
@@ -314,8 +329,42 @@ class SMTCListener(QThread):
                 self._is_playing = is_playing
                 self._play_start_wall = now
                 self._elapsed_when_paused = 0
+                if not self._has_native_timeline:
+                    self._pending_play_baseline = not is_playing
                 self.playback_state_changed.emit(is_playing)
                 return
+
+            if not self._has_native_timeline:
+                if is_playing:
+                    if self._pending_play_baseline:
+                        self._play_start_wall = now
+                        self._elapsed_when_paused = 0
+                        self._pending_play_baseline = False
+                        self._is_playing = True
+                        self._last_state = True
+                        self.playback_state_changed.emit(True)
+                        self.tick.emit(self._get_elapsed_ms_locked())
+                        return
+                    elif not self._is_playing:
+                        self._play_start_wall = now - (self._elapsed_when_paused / 1000.0)
+                        self._is_playing = True
+                        self._last_state = True
+                        self.playback_state_changed.emit(True)
+                        self.tick.emit(self._get_elapsed_ms_locked())
+                        return
+                else:
+                    if st == 2:
+                        self._pending_play_baseline = True
+                        self._elapsed_when_paused = 0
+                    elif self._is_playing:
+                        self._elapsed_when_paused = self._get_raw_elapsed_ms_locked()
+
+                    if self._is_playing or st == 2:
+                        self._is_playing = False
+                        self._last_state = False
+                        self.playback_state_changed.emit(False)
+                        self.tick.emit(self._get_elapsed_ms_locked())
+                    return
 
             if is_playing != self._last_state:
                 self._last_state = is_playing
@@ -346,24 +395,49 @@ class SMTCListener(QThread):
 
             with self._state_lock:
                 song_changed = (title != self._last_title or artist != self._last_artist)
-                if not self._startup_initialized:
+                if not self._startup_initialized or song_changed:
                     self._startup_initialized = True
                     self._last_title = title
                     self._last_artist = artist
                     self._offset_ms = settings.get_effective_song_offset(title, artist)
                     self._elapsed_when_paused = 0
-                    self._has_native_timeline = False
-                    self._native_duration_ms = 0
-                    self._play_start_wall = now
-                    emit_needed = True
-                elif song_changed:
-                    self._last_title = title
-                    self._last_artist = artist
-                    self._offset_ms = settings.get_effective_song_offset(title, artist)
-                    self._elapsed_when_paused = 0
-                    self._has_native_timeline = False
-                    self._native_duration_ms = 0
-                    self._play_start_wall = now
+
+                    tl = None
+                    try:
+                        tl = session.get_timeline_properties()
+                    except Exception:
+                        pass
+                    has_native = self._session_has_timestamps(session, tl)
+                    self._has_native_timeline = has_native
+                    end_s = self._td_to_seconds(getattr(tl, "end_time", None)) if tl else 0.0
+                    self._native_duration_ms = int(end_s * 1000) if has_native else 0
+
+                    pb = None
+                    try:
+                        pb = session.get_playback_info()
+                    except Exception:
+                        pass
+                    st = pb.playback_status if pb else 0
+                    is_currently_playing = (st == 4)
+
+                    now_mono = time.monotonic()
+                    if has_native:
+                        self._pending_play_baseline = False
+                        self._is_playing = is_currently_playing
+                        self._last_state = is_currently_playing
+                        self._play_start_wall = now_mono
+                    else:
+                        if is_currently_playing:
+                            self._play_start_wall = now_mono
+                            self._pending_play_baseline = False
+                            self._is_playing = True
+                            self._last_state = True
+                        else:
+                            self._play_start_wall = now_mono
+                            self._pending_play_baseline = True
+                            self._is_playing = False
+                            self._last_state = False
+
                     emit_needed = True
                 else:
                     emit_needed = False
@@ -392,7 +466,7 @@ class SMTCListener(QThread):
 
         with self._state_lock:
             # 探测当前会话是否提供有效时间轴
-            has_native = (end_s > 0.0)
+            has_native = self._session_has_timestamps(session, tl)
             self._has_native_timeline = has_native
             self._native_duration_ms = int(end_s * 1000) if has_native else 0
 
@@ -400,7 +474,8 @@ class SMTCListener(QThread):
                 # 无原生时间轴：使用本地单调时钟计时
                 if song_just_changed:
                     self._elapsed_when_paused = 0
-                    self._play_start_wall = now_mono
+                    if is_playing and not self._pending_play_baseline:
+                        self._play_start_wall = now_mono
                     self.tick.emit(self._get_elapsed_ms_locked())
                 return
 

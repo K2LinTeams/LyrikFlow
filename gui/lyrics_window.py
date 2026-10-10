@@ -266,6 +266,8 @@ class LyricsWindow(QObject):
     def _push_lyrics_to_ui(self) -> None:
         self._overlay.set_lyrics(self._lyrics)
         self._fullscreen.set_lyrics(self._lyrics)
+        self._overlay.set_playing(self.smtc._is_playing)
+        self._fullscreen.set_playing(self.smtc._is_playing)
         current_ms = self.smtc._get_elapsed_ms()
         idx = self._lyrics.get_line_index(current_ms) if self._lyrics else -1
         self._cur_index = idx
