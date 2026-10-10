@@ -824,6 +824,9 @@ class SettingsDialog(QDialog):
     # ── 导航切换 ─────────────────────────────────────────────────────────────
     def _switch_tab(self, idx: int):
         self._stack.setCurrentIndex(idx)
+        w = self._stack.widget(idx)
+        if isinstance(w, QScrollArea):
+            w.verticalScrollBar().setValue(0)
         font_css = font_manager.get_font_css_family(self._font_items)
         for i, b in enumerate(self._nav_buttons):
             if i == idx:
@@ -877,7 +880,10 @@ class SettingsDialog(QDialog):
             apply_pill_banner_btn(self._btn_rescan, font_css)
         # 刷新歌词展示窗
         if hasattr(self, "_lbl_prev_cur"):
-            self._update_ui_preview()
+            if hasattr(self, "_set_font_mode"):
+                self._set_font_mode(getattr(self, "_font_mode", "overlay"))
+            else:
+                self._update_ui_preview()
 
     def _make_scrollable(self, widget: QWidget) -> QScrollArea:
         scroll = QScrollArea()
@@ -1169,18 +1175,48 @@ class SettingsDialog(QDialog):
         card_font = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
         fl = QVBoxLayout(card_font)
         fl.setContentsMargins(18, 14, 18, 14)
-        fl.setSpacing(12)
+        fl.setSpacing(10)
 
-        lbl_font_title = QLabel("歌词字号")
+        # 头部：标题与模式切换胶囊
+        top_font_h = QHBoxLayout()
+        lbl_font_title = QLabel("歌词字号设置")
         lbl_font_title.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
-        fl.addWidget(lbl_font_title)
+        top_font_h.addWidget(lbl_font_title)
+        top_font_h.addStretch()
+
+        capsule_mode = QFrame()
+        capsule_mode.setStyleSheet("background: #EDF2FA; border-radius: 15px; padding: 2px;")
+        cap_l = QHBoxLayout(capsule_mode)
+        cap_l.setContentsMargins(2, 2, 2, 2)
+        cap_l.setSpacing(4)
+
+        self._btn_mode_ov = QPushButton("桌面悬浮窗")
+        self._btn_mode_fs = QPushButton("全屏画幅")
+        for b in (self._btn_mode_ov, self._btn_mode_fs):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setFixedHeight(26)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        self._btn_mode_ov.clicked.connect(lambda: self._set_font_mode("overlay"))
+        self._btn_mode_fs.clicked.connect(lambda: self._set_font_mode("fullscreen"))
+        cap_l.addWidget(self._btn_mode_ov)
+        cap_l.addWidget(self._btn_mode_fs)
+        top_font_h.addWidget(capsule_mode)
+        fl.addLayout(top_font_h)
+
+        # ── 悬浮窗面板 ──
+        self._panel_ov = QWidget()
+        ov_l = QVBoxLayout(self._panel_ov)
+        ov_l.setContentsMargins(0, 2, 0, 2)
+        ov_l.setSpacing(8)
 
         r1 = QHBoxLayout()
         r1.addWidget(QLabel("当前行 (px)：", styleSheet="color: #1B1F24; font-size: 13px;"))
         self._spin_cur = QSpinBox()
         self._spin_cur.setRange(16, 52)
         self._spin_cur.setValue(settings.get_font_size_current())
-        self._spin_cur.valueChanged.connect(self._update_ui_preview)
+        self._spin_cur.wheelEvent = lambda e: e.ignore()
+        self._spin_cur.valueChanged.connect(lambda _: self._update_ui_preview())
         r1.addWidget(self._spin_cur)
         r1.addSpacing(10)
         for sz in [24, 28, 32, 36]:
@@ -1189,14 +1225,15 @@ class SettingsDialog(QDialog):
             btn.clicked.connect(lambda _, s=sz: self._spin_cur.setValue(s))
             r1.addWidget(btn)
         r1.addStretch()
-        fl.addLayout(r1)
+        ov_l.addLayout(r1)
 
         r2 = QHBoxLayout()
-        r2.addWidget(QLabel("上下文行 (px)：", styleSheet="color: #1B1F24; font-size: 13px;"))
+        r2.addWidget(QLabel("译文/副行 (px)：", styleSheet="color: #1B1F24; font-size: 13px;"))
         self._spin_ctx = QSpinBox()
         self._spin_ctx.setRange(10, 32)
         self._spin_ctx.setValue(settings.get_font_size_context())
-        self._spin_ctx.valueChanged.connect(self._update_ui_preview)
+        self._spin_ctx.wheelEvent = lambda e: e.ignore()
+        self._spin_ctx.valueChanged.connect(lambda _: self._update_ui_preview())
         r2.addWidget(self._spin_ctx)
         r2.addSpacing(10)
         for sz in [12, 14, 16, 18]:
@@ -1205,12 +1242,54 @@ class SettingsDialog(QDialog):
             btn.clicked.connect(lambda _, s=sz: self._spin_ctx.setValue(s))
             r2.addWidget(btn)
         r2.addStretch()
-        fl.addLayout(r2)
+        ov_l.addLayout(r2)
+        fl.addWidget(self._panel_ov)
+
+        # ── 全屏面板 ──
+        self._panel_fs = QWidget()
+        fs_panel_l = QVBoxLayout(self._panel_fs)
+        fs_panel_l.setContentsMargins(0, 2, 0, 2)
+        fs_panel_l.setSpacing(8)
+
+        r_fs1 = QHBoxLayout()
+        r_fs1.addWidget(QLabel("当前行 (px)：", styleSheet="color: #1B1F24; font-size: 13px;"))
+        self._spin_fs_cur = QSpinBox()
+        self._spin_fs_cur.setRange(16, 72)
+        self._spin_fs_cur.setValue(settings.get_fullscreen_font_size_current())
+        self._spin_fs_cur.wheelEvent = lambda e: e.ignore()
+        self._spin_fs_cur.valueChanged.connect(lambda _: self._update_ui_preview())
+        r_fs1.addWidget(self._spin_fs_cur)
+        r_fs1.addSpacing(10)
+        for sz in [28, 36, 42, 48]:
+            btn = QPushButton(f"{sz}px")
+            apply_chip(btn)
+            btn.clicked.connect(lambda _, s=sz: self._spin_fs_cur.setValue(s))
+            r_fs1.addWidget(btn)
+        r_fs1.addStretch()
+        fs_panel_l.addLayout(r_fs1)
+
+        r_fs2 = QHBoxLayout()
+        r_fs2.addWidget(QLabel("上下文行 (px)：", styleSheet="color: #1B1F24; font-size: 13px;"))
+        self._spin_fs_ctx = QSpinBox()
+        self._spin_fs_ctx.setRange(10, 48)
+        self._spin_fs_ctx.setValue(settings.get_fullscreen_font_size_context())
+        self._spin_fs_ctx.wheelEvent = lambda e: e.ignore()
+        self._spin_fs_ctx.valueChanged.connect(lambda _: self._update_ui_preview())
+        r_fs2.addWidget(self._spin_fs_ctx)
+        r_fs2.addSpacing(10)
+        for sz in [14, 16, 18, 22]:
+            btn = QPushButton(f"{sz}px")
+            apply_chip(btn)
+            btn.clicked.connect(lambda _, s=sz: self._spin_fs_ctx.setValue(s))
+            r_fs2.addWidget(btn)
+        r_fs2.addStretch()
+        fs_panel_l.addLayout(r_fs2)
+        fl.addWidget(self._panel_fs)
 
         # 实时字号排版预览卡片
         self._preview_card = QFrame()
         self._preview_card.setObjectName("preview_card")
-        self._preview_card.setMinimumHeight(135)
+        self._preview_card.setMinimumHeight(125)
         self._preview_card.setStyleSheet("""
             #preview_card {
                 background-color: #141724;
@@ -1219,8 +1298,8 @@ class SettingsDialog(QDialog):
             }
         """)
         prev_layout = QVBoxLayout(self._preview_card)
-        prev_layout.setContentsMargins(20, 18, 20, 18)
-        prev_layout.setSpacing(10)
+        prev_layout.setContentsMargins(18, 14, 18, 14)
+        prev_layout.setSpacing(8)
 
         self._lbl_prev_cur = QLabel("不可解で不完全な魔法")
         self._lbl_prev_cur.setStyleSheet("background: transparent; border: none; color: #FFFFFF; font-weight: bold;")
@@ -1239,7 +1318,7 @@ class SettingsDialog(QDialog):
         prev_layout.addWidget(self._lbl_prev_trans)
         fl.addWidget(self._preview_card)
 
-        self._update_ui_preview()
+        self._set_font_mode("overlay")
         l.addWidget(card_font)
 
         # 3. 功能开关卡片：双语翻译
@@ -1253,6 +1332,7 @@ class SettingsDialog(QDialog):
         lbl_trans_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
         lbl_trans_d = QLabel("若歌曲包含译文则同步显示")
         lbl_trans_d.setStyleSheet("font-size: 11px; color: #6E7781;")
+        lbl_trans_d.setWordWrap(True)
         trans_v.addWidget(lbl_trans_t)
         trans_v.addWidget(lbl_trans_d)
         trans_l.addLayout(trans_v, 1)
@@ -1273,10 +1353,11 @@ class SettingsDialog(QDialog):
 
         roma_v = QVBoxLayout()
         roma_v.setSpacing(2)
-        lbl_roma_t = QLabel("显示罗马音 (Romaji)")
+        lbl_roma_t = QLabel("显示罗马音")
         lbl_roma_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
-        lbl_roma_d = QLabel("若歌曲包含罗马音注音则同步显示（支持网易云与 QQ 音乐）")
+        lbl_roma_d = QLabel("若歌曲包含注音则同步显示")
         lbl_roma_d.setStyleSheet("font-size: 11px; color: #6E7781;")
+        lbl_roma_d.setWordWrap(True)
         roma_v.addWidget(lbl_roma_t)
         roma_v.addWidget(lbl_roma_d)
         roma_l.addLayout(roma_v, 1)
@@ -1301,6 +1382,7 @@ class SettingsDialog(QDialog):
         lbl_prog_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
         lbl_prog_d = QLabel("播放无逐字歌词歌曲时，在当前歌词下方显示单句胶囊进度条")
         lbl_prog_d.setStyleSheet("font-size: 11px; color: #6E7781;")
+        lbl_prog_d.setWordWrap(True)
         prog_v.addWidget(lbl_prog_t)
         prog_v.addWidget(lbl_prog_d)
         prog_l.addLayout(prog_v, 1)
@@ -1321,6 +1403,7 @@ class SettingsDialog(QDialog):
         lbl_sec_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
         lbl_sec_d = QLabel("识别段落章节与分段角色名，隐藏标记行并将角色同步至翻译行")
         lbl_sec_d.setStyleSheet("font-size: 11px; color: #6E7781;")
+        lbl_sec_d.setWordWrap(True)
         sec_v.addWidget(lbl_sec_t)
         sec_v.addWidget(lbl_sec_d)
         sec_l.addLayout(sec_v, 1)
@@ -1332,29 +1415,34 @@ class SettingsDialog(QDialog):
 
         # 4. 全屏歌词上下文数量卡片
         card_fs = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
-        fs_l = QHBoxLayout(card_fs)
+        fs_l = QVBoxLayout(card_fs)
         fs_l.setContentsMargins(18, 14, 18, 14)
+        fs_l.setSpacing(10)
 
-        fs_v = QVBoxLayout()
-        fs_v.setSpacing(2)
         lbl_fs_t = QLabel("全屏上下文显示行数")
         lbl_fs_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
+        fs_l.addWidget(lbl_fs_t)
+
         lbl_fs_d = QLabel("当前高亮歌词上下各显示的行数 (1 ~ 8 行，阶梯渐隐)")
         lbl_fs_d.setStyleSheet("font-size: 11px; color: #6E7781;")
-        fs_v.addWidget(lbl_fs_t)
-        fs_v.addWidget(lbl_fs_d)
-        fs_l.addLayout(fs_v, 1)
+        lbl_fs_d.setWordWrap(True)
+        fs_l.addWidget(lbl_fs_d)
 
+        ctrl_fs = QHBoxLayout()
+        ctrl_fs.addWidget(QLabel("显示行数：", styleSheet="color: #1B1F24; font-size: 13px;"))
         self._spin_fs_lines = QSpinBox()
         self._spin_fs_lines.setRange(1, 8)
         self._spin_fs_lines.setValue(settings.get_fullscreen_context_lines())
-        fs_l.addWidget(self._spin_fs_lines)
-        fs_l.addSpacing(10)
+        self._spin_fs_lines.wheelEvent = lambda e: e.ignore()
+        ctrl_fs.addWidget(self._spin_fs_lines)
+        ctrl_fs.addSpacing(10)
         for num in [3, 4, 5, 6]:
             btn = QPushButton(f"{num}行")
             apply_chip(btn)
             btn.clicked.connect(lambda _, n=num: self._spin_fs_lines.setValue(n))
-            fs_l.addWidget(btn)
+            ctrl_fs.addWidget(btn)
+        ctrl_fs.addStretch()
+        fs_l.addLayout(ctrl_fs)
 
         l.addWidget(card_fs)
 
@@ -1752,13 +1840,94 @@ class SettingsDialog(QDialog):
         if self._overlay_widget is not None:
             self._overlay_widget.set_live_opacity(v / 100.0)
 
+    def _set_font_mode(self, mode: str):
+        self._font_mode = mode
+        font_css = font_manager.get_font_css_family(self._font_items)
+        if mode == "fullscreen":
+            if hasattr(self, "_panel_ov"):
+                self._panel_ov.setVisible(False)
+            if hasattr(self, "_panel_fs"):
+                self._panel_fs.setVisible(True)
+            if hasattr(self, "_btn_mode_fs"):
+                self._btn_mode_fs.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #0B57D0;
+                        color: #FFFFFF;
+                        border-radius: 13px;
+                        padding: 0 12px;
+                        font-family: {font_css};
+                        font-size: 12px;
+                        font-weight: 600;
+                        border: none;
+                    }}
+                """)
+            if hasattr(self, "_btn_mode_ov"):
+                self._btn_mode_ov.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: transparent;
+                        color: #475467;
+                        border-radius: 13px;
+                        padding: 0 12px;
+                        font-family: {font_css};
+                        font-size: 12px;
+                        font-weight: 500;
+                        border: none;
+                    }}
+                    QPushButton:hover {{
+                        background-color: #DFE7F5;
+                    }}
+                """)
+        else:
+            if hasattr(self, "_panel_ov"):
+                self._panel_ov.setVisible(True)
+            if hasattr(self, "_panel_fs"):
+                self._panel_fs.setVisible(False)
+            if hasattr(self, "_btn_mode_ov"):
+                self._btn_mode_ov.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #0B57D0;
+                        color: #FFFFFF;
+                        border-radius: 13px;
+                        padding: 0 12px;
+                        font-family: {font_css};
+                        font-size: 12px;
+                        font-weight: 600;
+                        border: none;
+                    }}
+                """)
+            if hasattr(self, "_btn_mode_fs"):
+                self._btn_mode_fs.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: transparent;
+                        color: #475467;
+                        border-radius: 13px;
+                        padding: 0 12px;
+                        font-family: {font_css};
+                        font-size: 12px;
+                        font-weight: 500;
+                        border: none;
+                    }}
+                    QPushButton:hover {{
+                        background-color: #DFE7F5;
+                    }}
+                """)
+        self._update_ui_preview()
+
     def _update_ui_preview(self):
-        cur_sz = self._spin_cur.value()
-        ctx_sz = self._spin_ctx.value()
         active_families = [it.family for it in self._font_items if it.enabled and it.is_valid]
-        self._lbl_prev_cur.setFont(font_manager.make_app_font(cur_sz, bold=True, families=active_families))
-        self._lbl_prev_roma.setFont(font_manager.make_app_font(ctx_sz, bold=False, families=active_families))
-        self._lbl_prev_trans.setFont(font_manager.make_app_font(ctx_sz, bold=False, families=active_families))
+        mode = getattr(self, "_font_mode", "overlay")
+        if mode == "fullscreen":
+            cur_sz = self._spin_fs_cur.value() if hasattr(self, "_spin_fs_cur") else settings.get_fullscreen_font_size_current()
+            sub_sz = max(12, int(cur_sz * 0.6))
+            self._lbl_prev_cur.setFont(font_manager.make_app_font(cur_sz, bold=True, families=active_families))
+            self._lbl_prev_roma.setFont(font_manager.make_app_font(sub_sz, bold=False, families=active_families))
+            self._lbl_prev_trans.setFont(font_manager.make_app_font(sub_sz, bold=False, families=active_families))
+        else:
+            cur_sz = self._spin_cur.value() if hasattr(self, "_spin_cur") else settings.get_font_size_current()
+            ctx_sz = self._spin_ctx.value() if hasattr(self, "_spin_ctx") else settings.get_font_size_context()
+            self._lbl_prev_cur.setFont(font_manager.make_app_font(cur_sz, bold=True, families=active_families))
+            self._lbl_prev_roma.setFont(font_manager.make_app_font(ctx_sz, bold=False, families=active_families))
+            self._lbl_prev_trans.setFont(font_manager.make_app_font(ctx_sz, bold=False, families=active_families))
 
     # ── TAB 3: 播放器与同步设置 ───────────────────────────────────────────────
     def _create_smtc_page(self) -> QWidget:
@@ -1792,7 +1961,6 @@ class SettingsDialog(QDialog):
             ("网易云", "cloudmusic.exe"),
             ("Spotify", "Spotify.exe"),
             ("QQ 音乐", "QQMusic.exe"),
-            ("汽水音乐", "qishui.exe"),
         ]
         for name, exe in presets:
             btn = QPushButton(f"+ {name}")
@@ -2082,6 +2250,10 @@ class SettingsDialog(QDialog):
         self._slider_op.setValue(85)
         self._spin_cur.setValue(28)
         self._spin_ctx.setValue(14)
+        if hasattr(self, "_spin_fs_cur"):
+            self._spin_fs_cur.setValue(38)
+        if hasattr(self, "_spin_fs_ctx"):
+            self._spin_fs_ctx.setValue(18)
         self._switch_trans.setChecked(True)
         self._switch_roma.setChecked(False)
         self._switch_progress.setChecked(True)
@@ -2116,6 +2288,10 @@ class SettingsDialog(QDialog):
         settings.set_parse_sections(self._switch_sections.isChecked())
         settings.set_font_size_current(self._spin_cur.value())
         settings.set_font_size_context(self._spin_ctx.value())
+        if hasattr(self, "_spin_fs_cur"):
+            settings.set_fullscreen_font_size_current(self._spin_fs_cur.value())
+        if hasattr(self, "_spin_fs_ctx"):
+            settings.set_fullscreen_font_size_context(self._spin_fs_ctx.value())
         settings.set_opacity(self._slider_op.value() / 100.0)
         settings.set_offset_ms(self._spin_off.value())
         settings.set_fullscreen_context_lines(self._spin_fs_lines.value())

@@ -50,6 +50,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "fullscreen": {
         "context_lines": 5,
+        "font_size_current": 38,
+        "font_size_context": 18,
     },
     "smtc": {
         "watched_apps": ["cloudmusic.exe"],
@@ -152,10 +154,22 @@ def _migrate_from_qsettings(cfg: dict[str, Any]) -> dict[str, Any]:
             else:
                 cfg["lyrics"]["parse_sections"] = bool(raw_ps)
 
-        # 全屏上下文
+        # 全屏设置
         if "fullscreen/context_lines" in keys:
             try:
                 cfg["fullscreen"]["context_lines"] = int(s.value("fullscreen/context_lines"))
+            except Exception:
+                pass
+
+        if "fullscreen/font_size_current" in keys:
+            try:
+                cfg["fullscreen"]["font_size_current"] = int(s.value("fullscreen/font_size_current"))
+            except Exception:
+                pass
+
+        if "fullscreen/font_size_context" in keys:
+            try:
+                cfg["fullscreen"]["font_size_context"] = int(s.value("fullscreen/font_size_context"))
             except Exception:
                 pass
 
@@ -263,6 +277,24 @@ def get_fullscreen_context_lines() -> int:
     """全屏模式下当前歌词上下各显示的上下文行数（默认 5 行）"""
     return int(_get(["fullscreen", "context_lines"], 5))
 
+def get_fullscreen_font_size_current() -> int:
+    """全屏模式下当前行歌词字号（默认 38）"""
+    val = _get(["fullscreen", "font_size_current"], None)
+    if val is None:
+        val = _get(["fullscreen", "size_current"], None)
+    if val is None:
+        return 38
+    return int(val)
+
+def get_fullscreen_font_size_context() -> int:
+    """全屏模式下上下文歌词字号（默认 18）"""
+    val = _get(["fullscreen", "font_size_context"], None)
+    if val is None:
+        val = _get(["fullscreen", "size_context"], None)
+    if val is None:
+        return 18
+    return int(val)
+
 def get_show_translation() -> bool:
     return bool(_get(["lyrics", "show_translation"], True))
 
@@ -367,6 +399,12 @@ def set_font_size_context(v: int) -> None:
 
 def set_fullscreen_context_lines(v: int) -> None:
     _set(["fullscreen", "context_lines"], max(1, min(10, int(v))))
+
+def set_fullscreen_font_size_current(v: int) -> None:
+    _set(["fullscreen", "font_size_current"], max(12, min(96, int(v))))
+
+def set_fullscreen_font_size_context(v: int) -> None:
+    _set(["fullscreen", "font_size_context"], max(8, min(64, int(v))))
 
 def set_show_translation(v: bool) -> None:
     _set(["lyrics", "show_translation"], bool(v))
