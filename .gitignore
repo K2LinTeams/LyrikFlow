@@ -26,7 +26,8 @@ sdist/
 var/
 wheels/
 share/python-wheels/
-data/fonts
+data/fonts/
+fonts/
 Web/
 *.egg-info/
 .installed.cfg

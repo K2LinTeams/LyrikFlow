@@ -48,6 +48,7 @@ LyrikFlow/
 │   ├── fullscreen_widget.py# 全画幅沉浸式歌词组件
 │   └── settings_dialog.py # MD3 风格设置面板
 ├── data/                  # 本地数据持久化目录
+│   ├── config.yaml        # 用户配置文件
 │   ├── fonts/             # 本地字体目录
 │   └── lyrikflow_cache.db # SQLite 缓存数据库
 ├── main.py                # 程序入口

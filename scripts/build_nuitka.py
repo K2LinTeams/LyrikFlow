@@ -104,7 +104,7 @@ def run_nuitka(clean: bool = False) -> str:
     # Include config example file
     cfg_example = os.path.join(PROJECT_ROOT, "config.example.yaml")
     if os.path.exists(cfg_example):
-        cmd.append(f"--include-data-file={cfg_example}=config.example.yaml")
+        cmd.append(f"--include-data-file={cfg_example}=data/config.example.yaml")
 
     # Include fonts if present
     fonts_dir = os.path.join(PROJECT_ROOT, "data", "fonts")
@@ -142,7 +142,7 @@ def create_zip(exe_path: str, zip_path: str) -> None:
         zf.write(exe_path, "LyrikFlow.exe")
         cfg_example = os.path.join(PROJECT_ROOT, "config.example.yaml")
         if os.path.exists(cfg_example):
-            zf.write(cfg_example, "config.example.yaml")
+            zf.write(cfg_example, "data/config.example.yaml")
         readme = os.path.join(PROJECT_ROOT, "README.md")
         if os.path.exists(readme):
             zf.write(readme, "README.md")

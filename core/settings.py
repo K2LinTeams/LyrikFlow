@@ -23,12 +23,7 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 
 
 def get_config_path() -> str:
-    """获取配置文件路径"""
-    root_cfg = os.path.join(BASE_DIR, "config.yaml")
-    data_cfg = os.path.join(DATA_DIR, "config.yaml")
-    if os.path.isfile(data_cfg) and not os.path.isfile(root_cfg):
-        return data_cfg
-    return root_cfg
+    return os.path.join(DATA_DIR, "config.yaml")
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -81,132 +76,18 @@ _lock = threading.RLock()
 _CACHE: Optional[dict[str, Any]] = None
 
 
-def _deep_merge(base: dict, update: dict) -> dict:
-    """深度合并字典，保留 base 中的默认键"""
-    res = copy.deepcopy(base)
-    for k, v in update.items():
-        if k in res and isinstance(res[k], dict) and isinstance(v, dict):
-            res[k] = _deep_merge(res[k], v)
+def _filter_valid_config(schema: dict, user_data: dict) -> dict:
+    res = {}
+    for k, def_val in schema.items():
+        if k in user_data:
+            val = user_data[k]
+            if isinstance(def_val, dict) and isinstance(val, dict):
+                res[k] = _filter_valid_config(def_val, val)
+            else:
+                res[k] = copy.deepcopy(val)
         else:
-            res[k] = copy.deepcopy(v)
+            res[k] = copy.deepcopy(def_val)
     return res
-
-
-def _migrate_from_qsettings(cfg: dict[str, Any]) -> dict[str, Any]:
-    """尝试从系统历史 QSettings (注册表) 迁移旧配置"""
-    try:
-        from PyQt6.QtCore import QSettings
-        s = QSettings("LyrikFlow", "LyrikFlow")
-        keys = s.allKeys()
-        if not keys:
-            return cfg
-
-        # 悬浮窗透明度
-        if "overlay/opacity" in keys:
-            try:
-                cfg["overlay"]["opacity"] = float(s.value("overlay/opacity"))
-            except Exception:
-                pass
-
-        # 悬浮窗位置大小
-        if "overlay/x" in keys:
-            try:
-                cfg["overlay"]["x"] = int(s.value("overlay/x"))
-                cfg["overlay"]["y"] = int(s.value("overlay/y"))
-                cfg["overlay"]["w"] = int(s.value("overlay/w"))
-                cfg["overlay"]["h"] = int(s.value("overlay/h"))
-            except Exception:
-                pass
-
-        # 字号
-        if "font/size_current" in keys:
-            try:
-                cfg["font"]["size_current"] = int(s.value("font/size_current"))
-            except Exception:
-                pass
-
-        if "font/size_context" in keys:
-            try:
-                cfg["font"]["size_context"] = int(s.value("font/size_context"))
-            except Exception:
-                pass
-
-        # 字体配置
-        if "font/configs" in keys:
-            raw = s.value("font/configs")
-            if raw:
-                try:
-                    parsed = json.loads(str(raw)) if isinstance(raw, str) else raw
-                    if isinstance(parsed, list):
-                        cfg["font"]["configs"] = parsed
-                except Exception:
-                    pass
-
-        # 歌词设置
-        if "lyrics/show_translation" in keys:
-            raw_tr = s.value("lyrics/show_translation")
-            if isinstance(raw_tr, str):
-                cfg["lyrics"]["show_translation"] = raw_tr.lower() in ("true", "1")
-            else:
-                cfg["lyrics"]["show_translation"] = bool(raw_tr)
-
-        if "lyrics/show_romaji" in keys:
-            raw_ro = s.value("lyrics/show_romaji")
-            if isinstance(raw_ro, str):
-                cfg["lyrics"]["show_romaji"] = raw_ro.lower() in ("true", "1")
-            else:
-                cfg["lyrics"]["show_romaji"] = bool(raw_ro)
-
-        if "lyrics/secondary_mode" in keys:
-            cfg["lyrics"]["secondary_mode"] = str(s.value("lyrics/secondary_mode"))
-
-        if "lyrics/offset_ms" in keys:
-            try:
-                cfg["lyrics"]["offset_ms"] = int(s.value("lyrics/offset_ms"))
-            except Exception:
-                pass
-
-        if "lyrics/parse_sections" in keys:
-            raw_ps = s.value("lyrics/parse_sections")
-            if isinstance(raw_ps, str):
-                cfg["lyrics"]["parse_sections"] = raw_ps.lower() in ("true", "1")
-            else:
-                cfg["lyrics"]["parse_sections"] = bool(raw_ps)
-
-        # 全屏设置
-        if "fullscreen/context_lines" in keys:
-            try:
-                cfg["fullscreen"]["context_lines"] = int(s.value("fullscreen/context_lines"))
-            except Exception:
-                pass
-
-        if "fullscreen/font_size_current" in keys:
-            try:
-                cfg["fullscreen"]["font_size_current"] = int(s.value("fullscreen/font_size_current"))
-            except Exception:
-                pass
-
-        if "fullscreen/font_size_context" in keys:
-            try:
-                cfg["fullscreen"]["font_size_context"] = int(s.value("fullscreen/font_size_context"))
-            except Exception:
-                pass
-
-        # 监听应用
-        if "smtc/watched_apps" in keys:
-            val = s.value("smtc/watched_apps")
-            if isinstance(val, list):
-                cfg["smtc"]["watched_apps"] = [str(v) for v in val if v]
-            elif isinstance(val, str):
-                cfg["smtc"]["watched_apps"] = [v.strip() for v in val.split(",") if v.strip()]
-
-        # 运行模式
-        if "window/mode" in keys:
-            cfg["window"]["mode"] = str(s.value("window/mode"))
-
-    except Exception as e:
-        print(f"[Settings] 迁移 QSettings 失败: {e}")
-    return cfg
 
 
 def _get_config() -> dict[str, Any]:
@@ -221,16 +102,14 @@ def _get_config() -> dict[str, Any]:
                 with open(cfg_path, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f)
                 if isinstance(data, dict):
-                    _CACHE = _deep_merge(DEFAULT_CONFIG, data)
+                    _CACHE = _filter_valid_config(DEFAULT_CONFIG, data)
                 else:
                     _CACHE = copy.deepcopy(DEFAULT_CONFIG)
             except Exception as e:
                 print(f"[Settings] 读取 YAML 配置文件失败: {e}，将采用默认配置")
                 _CACHE = copy.deepcopy(DEFAULT_CONFIG)
         else:
-            # 首次运行，迁移 QSettings 并写出默认 config.yaml
-            merged = _migrate_from_qsettings(copy.deepcopy(DEFAULT_CONFIG))
-            _CACHE = merged
+            _CACHE = copy.deepcopy(DEFAULT_CONFIG)
             _save_config_locked()
 
         return _CACHE
@@ -298,21 +177,11 @@ def get_fullscreen_context_lines() -> int:
 
 def get_fullscreen_font_size_current() -> int:
     """全屏模式下当前行歌词字号（默认 38）"""
-    val = _get(["fullscreen", "font_size_current"], None)
-    if val is None:
-        val = _get(["fullscreen", "size_current"], None)
-    if val is None:
-        return 38
-    return int(val)
+    return int(_get(["fullscreen", "font_size_current"], 38))
 
 def get_fullscreen_font_size_context() -> int:
     """全屏模式下上下文歌词字号（默认 18）"""
-    val = _get(["fullscreen", "font_size_context"], None)
-    if val is None:
-        val = _get(["fullscreen", "size_context"], None)
-    if val is None:
-        return 18
-    return int(val)
+    return int(_get(["fullscreen", "font_size_context"], 18))
 
 def get_show_translation() -> bool:
     return bool(_get(["lyrics", "show_translation"], True))

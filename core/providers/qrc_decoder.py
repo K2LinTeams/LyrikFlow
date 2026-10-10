@@ -88,27 +88,6 @@ def _fast_qrc_decrypt(cipher_bytes: bytes) -> bytes:
     return bytes(out)
 
 
-class _QrcDES:
-    """向后兼容"""
-
-    def __init__(self, key: bytes = QQ_KEY) -> None:
-        self.key = key
-        self._is_default = (key == QQ_KEY)
-        if not self._is_default:
-            from scripts.generate_qrc_tables import _ReferenceDES
-            self._fallback_engine = _ReferenceDES(key)
-        else:
-            self._fallback_engine = None
-
-    def decrypt(self, cipher_bytes: bytes) -> bytes:
-        if self._is_default:
-            return _fast_qrc_decrypt(cipher_bytes)
-        return self._fallback_engine.decrypt(cipher_bytes)
-
-
-_default_des = _QrcDES(QQ_KEY)
-
-
 def decrypt_qrc(hex_str: str) -> str:
     """
     解密 QQ 音乐 QRC Hex 密文

@@ -315,19 +315,6 @@ def get_song_offset(title: str, artist: str = "") -> Optional[int]:
             row = cursor.fetchone()
             if row is not None:
                 return int(row[0])
-
-            # 兼容：若 song_offsets 表未命中，尝试从 song_cache 的 ParsedLyrics 中读取
-            cursor.execute("""
-                SELECT lyrics_json FROM song_cache
-                WHERE track_key = ? OR track_key = ? OR track_key = ?
-            """, (key, raw_key, curly_key))
-            row_c = cursor.fetchone()
-            if row_c and row_c[0]:
-                lj = _decompress_lyrics(row_c[0])
-                if lj:
-                    p = ParsedLyrics.from_json(lj)
-                    if p and p.offset_ms != 0:
-                        return int(p.offset_ms)
         except Exception as e:
             print(f"[db_cache] 查询歌曲偏移异常: {e}")
         finally:
