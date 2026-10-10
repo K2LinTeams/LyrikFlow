@@ -17,8 +17,28 @@ except ImportError:
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "lyrikflow_cache.db")
+MAX_DB_CACHE_ENTRIES = 2000  # 本地 SQLite 歌词缓存最大歌曲数（按 last_accessed 自动淘汰最旧数据）
 
 _lock = threading.Lock()
+
+
+def _prune_db_cache(cursor: sqlite3.Cursor) -> None:
+    """保持 SQLite 歌词缓存条数上限，按最近访问时间 LRU 淘汰最旧数据"""
+    try:
+        cursor.execute("SELECT COUNT(*) FROM song_cache;")
+        row = cursor.fetchone()
+        if row and row[0] > MAX_DB_CACHE_ENTRIES:
+            excess = row[0] - MAX_DB_CACHE_ENTRIES
+            cursor.execute("""
+                DELETE FROM song_cache 
+                WHERE id IN (
+                    SELECT id FROM song_cache 
+                    ORDER BY last_accessed ASC 
+                    LIMIT ?
+                );
+            """, (excess,))
+    except Exception as e:
+        print(f"[db_cache] 自动清理数据库缓存异常: {e}")
 
 
 def _compress_lyrics(json_str: str) -> bytes:
@@ -71,6 +91,10 @@ def init_db() -> None:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_song_track_key 
                 ON song_cache(track_key);
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_song_last_accessed 
+                ON song_cache(last_accessed);
             """)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS song_offsets (
@@ -200,6 +224,7 @@ def save_song_cache(
                 key, title.strip(), artist.strip(), final_provider, final_song_id,
                 compressed_bytes, final_cover, final_sub_name
             ))
+            _prune_db_cache(cursor)
             conn.commit()
         except Exception as e:
             print(f"[db_cache] 保存缓存异常: {e}")

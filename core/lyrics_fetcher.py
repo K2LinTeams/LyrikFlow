@@ -3,6 +3,8 @@ core/lyrics_fetcher.py — 多源歌词获取
 """
 from __future__ import annotations
 
+import threading
+from collections import OrderedDict
 from typing import Callable, Optional
 
 from core import db_cache, settings
@@ -20,8 +22,32 @@ NETEASE_PROVIDER = NeteaseLyricProvider()
 QQMUSIC_PROVIDER = QQMusicLyricProvider()
 LRCLIB_PROVIDER = LrclibLyricProvider()
 
-# 内存快速缓存：(title, artist) -> (ParsedLyrics, cover_bytes, sub_name)
-_mem_cache: dict[str, tuple[Optional[ParsedLyrics], Optional[bytes], str]] = {}
+# 内存 LRU 快速缓存 with cache control
+MAX_MEM_CACHE_SIZE = 50
+_mem_cache: OrderedDict[str, tuple[Optional[ParsedLyrics], Optional[bytes], str]] = OrderedDict()
+_mem_lock = threading.Lock()
+
+
+def _get_from_mem_cache(key: str) -> Optional[tuple[Optional[ParsedLyrics], Optional[bytes], str]]:
+    with _mem_lock:
+        if key in _mem_cache:
+            _mem_cache.move_to_end(key)
+            return _mem_cache[key]
+    return None
+
+
+def _put_into_mem_cache(key: str, val: tuple[Optional[ParsedLyrics], Optional[bytes], str]) -> None:
+    with _mem_lock:
+        if key in _mem_cache:
+            _mem_cache.move_to_end(key)
+        _mem_cache[key] = val
+        while len(_mem_cache) > MAX_MEM_CACHE_SIZE:
+            _mem_cache.popitem(last=False)
+
+
+def _remove_from_mem_cache(key: str) -> None:
+    with _mem_lock:
+        _mem_cache.pop(key, None)
 
 
 def fetch_lyrics_multi(
@@ -37,8 +63,8 @@ def fetch_lyrics_multi(
     返回: (parsed_lyrics, hd_cover_bytes, sub_name)
     """
     cache_key = f"{title.lower().strip()}|||{artist.lower().strip()}"
-    if cache_key in _mem_cache:
-        cached_result = _mem_cache[cache_key]
+    cached_result = _get_from_mem_cache(cache_key)
+    if cached_result is not None:
         if on_progress:
             on_progress(1.0)
         return cached_result
@@ -54,7 +80,7 @@ def fetch_lyrics_multi(
         sub_name = cached_db.get("sub_name", "")
         if on_progress:
             on_progress(1.0)
-        _mem_cache[cache_key] = (parsed, hd_cover, sub_name)
+        _put_into_mem_cache(cache_key, (parsed, hd_cover, sub_name))
         return parsed, hd_cover, sub_name
 
     final_lyrics: Optional[ParsedLyrics] = None
@@ -268,7 +294,7 @@ def fetch_lyrics_multi(
 
     result = (final_lyrics, final_cover, final_sub_name)
     if final_lyrics:
-        _mem_cache[cache_key] = result
+        _put_into_mem_cache(cache_key, result)
     return result
 
 
@@ -338,7 +364,7 @@ def fetch_and_apply_override(
             song_id=song_item.song_id,
         )
         cache_key = f"{track_title.lower().strip()}|||{track_artist.lower().strip()}"
-        _mem_cache[cache_key] = (parsed_lyrics, cover_data, sub_name)
+        _put_into_mem_cache(cache_key, (parsed_lyrics, cover_data, sub_name))
 
     if on_progress:
         on_progress(1.0)
@@ -350,7 +376,7 @@ def clear_song_cache(title: str, artist: str = "") -> None:
     """清除当前歌曲的数据库本地缓存与内存缓存"""
     db_cache.delete_song_cache(title, artist)
     cache_key = f"{title.lower().strip()}|||{artist.lower().strip()}"
-    _mem_cache.pop(cache_key, None)
+    _remove_from_mem_cache(cache_key)
 
 
 def search_all_sources(
