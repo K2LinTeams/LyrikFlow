@@ -108,16 +108,33 @@ class NeteaseLyricProvider(BaseLyricProvider):
         )
 
     def _pick_best_song(self, songs: list[dict], title: str, artist: str) -> SearchSongItem:
-        title_lower = title.lower().strip()
-        artist_lower = artist.lower().strip()
+        import difflib, unicodedata, re
+
+        def _clean(s: str) -> str:
+            s = unicodedata.normalize('NFKC', s).lower().strip()
+            s = re.sub(r"\(.*?\)|\[.*?\]|（.*?）|【.*?】", "", s)
+            s = re.sub(r"\b(?:feat\.?|ft\.?|with)\b.*", "", s, flags=re.IGNORECASE)
+            return re.sub(r"[^\w\u4e00-\u9fa5]+", "", s)
+
+        t_clean = _clean(title)
+        a_clean = _clean(artist)
+
+        def safe_artist_match(target: str, cand: str) -> bool:
+            if not target or not cand:
+                return False
+            if target == cand:
+                return True
+            if len(target) <= 3 or len(cand) <= 3:
+                return target == cand
+            return target in cand or cand in target
 
         best = songs[0]
         # 寻找完全同名且歌手匹配的歌曲
         for s in songs:
-            s_name = (s.get("name") or "").lower().strip()
-            s_artists = [a.get("name", "").lower().strip() for a in (s.get("ar") or s.get("artists") or [])]
-            if s_name == title_lower:
-                if any(artist_lower in a or a in artist_lower for a in s_artists if a):
+            s_name = _clean(s.get("name") or "")
+            s_artists = [_clean(a.get("name", "")) for a in (s.get("ar") or s.get("artists") or [])]
+            if s_name == t_clean:
+                if any(safe_artist_match(a_clean, a) for a in s_artists if a):
                     best = s
                     break
 

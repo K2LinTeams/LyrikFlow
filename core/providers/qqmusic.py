@@ -222,6 +222,7 @@ class QQMusicLyricProvider(BaseLyricProvider):
             s = s.lower().strip()
             if strip_brackets:
                 s = re.sub(r"\(.*?\)|\[.*?\]|（.*?）|【.*?】", "", s)
+                s = re.sub(r"\b(?:feat\.?|ft\.?|with)\b.*", "", s, flags=re.IGNORECASE)
             s = re.sub(r"[^\w\u4e00-\u9fa5]+", "", s)
             return s
 
@@ -256,6 +257,14 @@ class QQMusicLyricProvider(BaseLyricProvider):
         # 提取标题括号中的合作者
         for b in re.findall(r"[\(\[（【](.*?)[\)\]）】]", title):
             for p in re.split(r"[xX/&,、+，]|feat\.?|with", b):
+                p_norm = normalize_str(p.strip(), strip_brackets=False)
+                if len(p_norm) >= 2:
+                    target_artists.add(p_norm)
+
+        # 提取标题裸露后缀中的合作者
+        m_feat = re.search(r"\b(?:feat\.?|ft\.?|with)\s+(.+)", title, flags=re.IGNORECASE)
+        if m_feat:
+            for p in re.split(r"[xX/&,、+，]", m_feat.group(1)):
                 p_norm = normalize_str(p.strip(), strip_brackets=False)
                 if len(p_norm) >= 2:
                     target_artists.add(p_norm)

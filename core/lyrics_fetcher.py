@@ -125,10 +125,29 @@ def fetch_lyrics_multi(
                 if on_cover:
                     on_cover(title, artist, final_cover)
 
+    def _is_matching_title(cand_title: str, query_title: str) -> bool:
+        if not cand_title or not query_title:
+            return True
+        import difflib, unicodedata, re
+        def _clean(s: str) -> str:
+            s = unicodedata.normalize('NFKC', s).lower().strip()
+            s = re.sub(r"\(.*?\)|\[.*?\]|（.*?）|【.*?】", "", s)
+            s = re.sub(r"\b(?:feat\.?|ft\.?|with)\b.*", "", s, flags=re.IGNORECASE)
+            return re.sub(r"[^\w\u4e00-\u9fa5]+", "", s)
+        c = _clean(cand_title)
+        q = _clean(query_title)
+        if not c or not q:
+            return True
+        if c == q or c in q or q in c:
+            return True
+        return difflib.SequenceMatcher(None, c, q).ratio() >= 0.60
+
     def _worker_netease():
         nonlocal raw_netease, item_netease, cover_netease
         try:
             item_netease = NETEASE_PROVIDER.search_song(title, artist)
+            if item_netease and not _is_matching_title(item_netease.title, title):
+                item_netease = None
             if item_netease and (not is_cancelled or not is_cancelled()):
                 if item_netease.sub_name:
                     _update_sub_name(item_netease.sub_name, is_qq=False)
@@ -144,6 +163,8 @@ def fetch_lyrics_multi(
         nonlocal raw_qq, item_qq, cover_qq
         try:
             item_qq = QQMUSIC_PROVIDER.search_song(title, artist)
+            if item_qq and not _is_matching_title(item_qq.title, title):
+                item_qq = None
             if item_qq and (not is_cancelled or not is_cancelled()):
                 if item_qq.sub_name:
                     _update_sub_name(item_qq.sub_name, is_qq=True)
