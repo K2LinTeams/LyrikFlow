@@ -7,16 +7,23 @@ import copy
 import json
 import os
 import threading
+import sys
 from typing import Any, Optional
 import yaml
 
 # 项目根目录与配置文件路径
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+def get_base_dir() -> str:
+    """获取根目录"""
+    if getattr(sys, "frozen", False) or "__compiled__" in globals():
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+BASE_DIR = get_base_dir()
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
 
 def get_config_path() -> str:
-    """获取配置文件路径，优先使用根目录 config.yaml，兼容 data/config.yaml"""
+    """获取配置文件路径"""
     root_cfg = os.path.join(BASE_DIR, "config.yaml")
     data_cfg = os.path.join(DATA_DIR, "config.yaml")
     if os.path.isfile(data_cfg) and not os.path.isfile(root_cfg):

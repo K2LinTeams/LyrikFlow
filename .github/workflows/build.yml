@@ -1,0 +1,68 @@
+name: Build and Release (Nuitka)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows x64 (Nuitka)
+    runs-on: windows-latest
+
+    env:
+      NUITKA_CACHE_DIR: ${{ github.workspace }}/.nuitka-cache
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+          cache: 'pip'
+
+      - name: Cache Nuitka CCache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.nuitka-cache
+          key: ${{ runner.os }}-nuitka-${{ hashFiles('requirements.txt', 'scripts/build_nuitka.py') }}
+          restore-keys: |
+            ${{ runner.os }}-nuitka-
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip wheel setuptools
+          pip install -r requirements.txt
+          pip install nuitka zstandard
+
+      - name: Compile and Package with Nuitka
+        run: |
+          python scripts/build_nuitka.py --clean --zip
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LyrikFlow-Windows-x64
+          path: dist/LyrikFlow-Windows-x64.zip
+          if-no-files-found: error
+
+      - name: Publish Release Assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/LyrikFlow-Windows-x64.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false

@@ -14,8 +14,19 @@ try:
 except ImportError:
     from lyrics_parser import ParsedLyrics
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+try:
+    from core import settings
+    BASE_DIR = settings.BASE_DIR
+    DATA_DIR = settings.DATA_DIR
+except Exception:
+    import sys
+    BASE_DIR = (
+        os.path.dirname(os.path.abspath(sys.executable))
+        if (getattr(sys, "frozen", False) or "__compiled__" in globals())
+        else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    DATA_DIR = os.path.join(BASE_DIR, "data")
+
 DB_PATH = os.path.join(DATA_DIR, "lyrikflow_cache.db")
 MAX_DB_CACHE_ENTRIES = 2000  # 本地 SQLite 歌词缓存最大歌曲数
 

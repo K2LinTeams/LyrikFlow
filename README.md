@@ -61,3 +61,16 @@ LyrikFlow/
   快进后会有误差，因此不建议拖动进度条，校准请使用切歌。
 - 网易云 API 获取失败时自动回退到 LRCLIB（英文歌曲覆盖更好）。
 - 需要 **Python 3.9+ 64位（CPython）**，不支持 MSYS2 Python。
+
+## 打包与发布 (Nuitka)
+
+本项目已提供自动化构建脚本与 GitHub Actions 工作流：
+
+### 本地编译 (Windows)
+
+```powershell
+pip install -r requirements.txt
+pip install nuitka zstandard
+python scripts/build_nuitka.py --clean --zip
+```
+编译产物位于 `dist/LyrikFlow` 目录及 `dist/LyrikFlow-Windows-x64.zip`。

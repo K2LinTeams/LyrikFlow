@@ -31,13 +31,13 @@ SYSTEM_FALLBACK_FAMILIES = [
 
 @dataclass
 class FontItem:
-    family: str                      # 字体家族名，如 "Zen Maru Gothic"
-    files: list[str] = field(default_factory=list)  # 文件名列表
-    paths: list[str] = field(default_factory=list)  # 文件绝对路径
-    total_size: int = 0              # 字节总大小
-    enabled: bool = True             # 是否启用
-    is_valid: bool = True            # 文件是否存在且加载成功
-    error_msg: str = ""              # 错误详情
+    family: str
+    files: list[str] = field(default_factory=list)
+    paths: list[str] = field(default_factory=list)
+    total_size: int = 0
+    enabled: bool = True
+    is_valid: bool = True
+    error_msg: str = ""
 
 
 _CACHED_ITEMS: list[FontItem] = []
@@ -46,8 +46,7 @@ _FILE_TO_FAMILIES: dict[str, list[str]] = {}
 
 
 def get_candidate_font_dirs() -> list[str]:
-    """返回所有可能存放字体的有效目录列表（优先级：data/fonts -> 项目根/fonts -> 工作目录）"""
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base = getattr(settings, "BASE_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     candidates = [
         os.path.join(base, "data", "fonts"),
         os.path.join(base, "fonts"),
@@ -65,8 +64,7 @@ def get_candidate_font_dirs() -> list[str]:
 
 
 def get_fonts_dir() -> str:
-    """获取主要字体目录绝对路径 (默认 data/fonts)"""
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base = getattr(settings, "BASE_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     target = os.path.join(base, "data", "fonts")
     if not os.path.exists(target):
         try:
@@ -77,7 +75,6 @@ def get_fonts_dir() -> str:
 
 
 def format_bytes(size_bytes: int) -> str:
-    """人性化格式化文件大小"""
     if size_bytes < 1024:
         return f"{size_bytes} B"
     elif size_bytes < 1024 * 1024:
@@ -88,8 +85,7 @@ def format_bytes(size_bytes: int) -> str:
 
 def scan_fonts() -> list[FontItem]:
     """
-    自动扫描 data/fonts (及兼容目录) 下的所有字体文件，载入 QFontDatabase，
-    并与已保存的偏好设置（启用状态与优先级次序）进行合并对齐。
+    自动扫描字体文件，载入 QFontDatabase
     """
     global _CACHED_ITEMS, _LOADED_PATHS, _FILE_TO_FAMILIES
     candidate_dirs = get_candidate_font_dirs()
@@ -108,7 +104,6 @@ def scan_fonts() -> list[FontItem]:
         except Exception:
             pass
 
-    # 临时映射：family -> FontItem
     family_map: dict[str, FontItem] = {}
 
     for fname_lower, fpath in found_files.items():
@@ -132,11 +127,9 @@ def scan_fonts() -> list[FontItem]:
             if fams:
                 _FILE_TO_FAMILIES[fpath] = fams
         elif fpath in _FILE_TO_FAMILIES:
-            # 之前已成功注册过该文件，直接复用已缓存的族名
             fams = _FILE_TO_FAMILIES[fpath]
 
         if fid < 0 and not fams:
-            # 字体加载失败
             base_name = os.path.splitext(fname)[0]
             if base_name not in family_map:
                 family_map[base_name] = FontItem(
@@ -232,7 +225,7 @@ def scan_fonts() -> list[FontItem]:
 
 
 def get_font_items() -> list[FontItem]:
-    """获取当前字体列表（未扫描则自动扫描）"""
+    """获取当前字体列表"""
     global _CACHED_ITEMS
     if not _CACHED_ITEMS:
         return scan_fonts()
@@ -249,8 +242,7 @@ def save_font_items(items: list[FontItem]) -> None:
 
 def get_effective_font_families() -> list[str]:
     """
-    获取生效的字体族名回退列表：
-    已启用的有效本地字体 + 默认回退字体栈。
+    获取生效的字体族名回退列表
     """
     items = get_font_items()
     active_local: list[str] = [
@@ -269,9 +261,7 @@ def get_effective_font_families() -> list[str]:
 
 def get_font_css_family(custom_items: Optional[list[FontItem]] = None) -> str:
     """
-    计算适合用于 QSS / CSS 样式表的 font-family 字符串。
-    若提供了 custom_items（如设置面板内存中暂存的字体排序列表），则基于该列表计算；
-    否则基于全局生效列表计算。
+    计算适合用于 QSS / CSS 样式表的 font-family 字符串
     """
     if custom_items is not None:
         active_local = [it.family for it in custom_items if it.enabled and it.is_valid]
@@ -318,10 +308,6 @@ def open_fonts_folder() -> None:
 
 
 def get_font_sample_text(family: str) -> str:
-    """
-    根据字体自身实际支持的文字系统与字形集合，生成能够 100% 由该字体独立渲染的预览样例文本。
-    禁止依赖任何跨字体回退，确保每个字体的预览卡片只展示该字体自身的真实效果。
-    """
     ws = set(w.name for w in QFontDatabase.writingSystems(family))
     has_simplified = "SimplifiedChinese" in ws
     has_traditional = "TraditionalChinese" in ws

@@ -105,11 +105,14 @@ probe_thumbnail.*
 *~
 
 # -----------------------------------------------------------------------------
-# Operating System Artifacts
+# Operating System Artifacts & Build Cache
 # -----------------------------------------------------------------------------
 .DS_Store
 Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
-scripts/
+.nuitka-cache/
+
+scripts/generate_qrc_tables.py
+scripts/test_fetch_benchmark.py
