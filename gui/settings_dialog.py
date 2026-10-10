@@ -7,17 +7,20 @@ import copy
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QSize, QRectF, pyqtProperty, QPropertyAnimation, QEasingCurve, QPoint, QThread, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QImage, QPixmap, QPainterPath
+from PyQt6.QtGui import (
+    QColor, QPainter, QPen, QFont, QImage, QPixmap, QPainterPath,
+    QLinearGradient, QBrush
+)
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
     QLineEdit, QPushButton, QSpinBox, QWidget,
     QScrollArea, QStackedWidget, QFrame, QSizePolicy,
     QAbstractButton, QApplication, QGraphicsDropShadowEffect,
-    QCheckBox
+    QCheckBox, QColorDialog
 )
 
 try:
-    from core import settings, font_manager, db_cache, lyrics_fetcher
+    from core import settings, font_manager, db_cache, lyrics_fetcher, color_theme
     from core.font_manager import FontItem
     from core.providers.base import SearchSongItem
 except ImportError:
@@ -25,12 +28,13 @@ except ImportError:
     import font_manager
     import db_cache
     import lyrics_fetcher
+    import color_theme
     from font_manager import FontItem
     from providers.base import SearchSongItem
 
 
 # ── MD3 全局样式表构建器 ──────────────────────────────────────
-def build_dialog_stylesheet(font_css: str = "") -> str:
+def build_dialog_stylesheet(font_css: str = "", primary_hex: str = "#0B57D0", container_hex: str = "#D3E3FD") -> str:
     if not font_css:
         font_css = font_manager.get_font_css_family()
     return f"""
@@ -51,7 +55,7 @@ QMessageBox QLabel {{
     font-size: 13px;
 }}
 QMessageBox QPushButton {{
-    background-color: #0B57D0;
+    background-color: {primary_hex};
     color: #FFFFFF;
     border: none;
     border-radius: 14px;
@@ -62,7 +66,7 @@ QMessageBox QPushButton {{
     min-width: 60px;
 }}
 QMessageBox QPushButton:hover {{
-    background-color: #0842A0;
+    opacity: 0.9;
 }}
 
 QLabel, QPushButton, QLineEdit, QSpinBox {{
@@ -91,7 +95,7 @@ QScrollBar::handle:vertical {{
     border-radius: 3px;
 }}
 QScrollBar::handle:vertical:hover {{
-    background: #0B57D0;
+    background: {primary_hex};
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0px;
@@ -106,11 +110,11 @@ QLineEdit {{
     font-family: {font_css};
     padding: 8px 16px;
     font-size: 13px;
-    selection-background-color: #D3E3FD;
+    selection-background-color: {container_hex};
     selection-color: #041E49;
 }}
 QLineEdit:focus {{
-    border: 2px solid #0B57D0;
+    border: 2px solid {primary_hex};
     background: #FFFFFF;
 }}
 
@@ -124,7 +128,7 @@ QSpinBox {{
     font-size: 13px;
 }}
 QSpinBox:focus {{
-    border: 2px solid #0B57D0;
+    border: 2px solid {primary_hex};
 }}
 QSpinBox::up-button, QSpinBox::down-button {{
     width: 20px;
@@ -139,19 +143,18 @@ QSlider::groove:horizontal {{
     border-radius: 3px;
 }}
 QSlider::sub-page:horizontal {{
-    background: #0B57D0;
+    background: {primary_hex};
     border-radius: 3px;
 }}
 QSlider::handle:horizontal {{
     width: 20px;
     height: 20px;
     margin: -7px 0;
-    background: #0B57D0;
+    background: {primary_hex};
     border: 2.5px solid #FFFFFF;
     border-radius: 10px;
 }}
 QSlider::handle:horizontal:hover {{
-    background: #1B6EF3;
     border-color: #FFFFFF;
 }}
 
@@ -166,12 +169,12 @@ QPushButton {{
 """
 
 
-def apply_pill_primary(btn: QPushButton, font_css: str = ""):
+def apply_pill_primary(btn: QPushButton, font_css: str = "", primary_hex: str = "#0B57D0"):
     if not font_css:
         font_css = font_manager.get_font_css_family()
     btn.setStyleSheet(f"""
         QPushButton {{
-            background-color: #0B57D0;
+            background-color: {primary_hex};
             color: #FFFFFF;
             border: none;
             border-radius: 19px;
@@ -182,10 +185,12 @@ def apply_pill_primary(btn: QPushButton, font_css: str = ""):
             outline: none;
         }}
         QPushButton:hover {{
-            background-color: #1B6EF3;
+            background-color: {primary_hex};
+            opacity: 0.9;
         }}
         QPushButton:pressed {{
-            background-color: #0842A0;
+            background-color: {primary_hex};
+            opacity: 0.8;
         }}
     """)
 
@@ -395,12 +400,12 @@ def _lerp_color(c1: QColor, c2: QColor, t: float) -> QColor:
 
 # ── MD3 规范圆润开关控件 ──────────────────────────────────────
 class MD3Switch(QAbstractButton):
-    """
-    Material Design 3 原生风格胶囊开关
-    - 开启：高对比度 Google 蓝轨道 + 纯白圆形滑块
-    - 关闭：柔和浅灰蓝轨道 + 深灰蓝圆形滑块
-    - 联动平滑缓动动画与渐变色插值，避免残影与点击不同步
-    """
+    GLOBAL_ACTIVE_COLOR = QColor("#0B57D0")
+
+    @classmethod
+    def set_global_active_color(cls, col_hex: str):
+        cls.GLOBAL_ACTIVE_COLOR = QColor(col_hex)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setCheckable(True)
@@ -461,10 +466,11 @@ class MD3Switch(QAbstractButton):
         track_rect = QRectF(x_offset, y_offset, track_w, track_h)
 
         t = self._thumb_pos
+        active_col = getattr(MD3Switch, "GLOBAL_ACTIVE_COLOR", QColor("#0B57D0"))
         if self.isEnabled():
-            track_color = _lerp_color(QColor("#E3E8F0"), QColor("#0B57D0"), t)
+            track_color = _lerp_color(QColor("#E3E8F0"), active_col, t)
             thumb_color = _lerp_color(QColor("#5A6A80"), QColor("#FFFFFF"), t)
-            border_color = _lerp_color(QColor("#C4D0E3"), QColor("#0B57D0"), t)
+            border_color = _lerp_color(QColor("#C4D0E3"), active_col, t)
         else:
             track_color = QColor("#EDF0F5")
             thumb_color = QColor("#B5BCC8")
@@ -591,6 +597,94 @@ class CoverThumbnailWidget(QWidget):
             painter.drawText(cover_rect, int(Qt.AlignmentFlag.AlignCenter), "♫")
 
 
+class ColorSwatchButton(QPushButton):
+    """用于展示当前颜色并支持点击调起色彩拾取器的圆角色块按钮"""
+    colorChanged = pyqtSignal(str)
+
+    def __init__(self, color_hex: str = "#FFFFFF", size: int = 32, parent=None):
+        super().__init__(parent)
+        self._color_hex = color_hex.upper()
+        self._size = size
+        self.setFixedSize(size, size)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("点击选择颜色")
+        self.clicked.connect(self._on_click)
+
+    def get_color(self) -> str:
+        return self._color_hex
+
+    def set_color(self, hex_val: str):
+        if color_theme.is_valid_hex(hex_val):
+            self._color_hex = color_theme.normalize_hex(hex_val)
+            self.update()
+
+    def _on_click(self):
+        cur_qcol = QColor(self._color_hex)
+        chosen = QColorDialog.getColor(cur_qcol, self.window(), "选择颜色")
+        if chosen.isValid():
+            hex_str = chosen.name(QColor.NameFormat.HexRgb).upper()
+            self.set_color(hex_str)
+            self.colorChanged.emit(hex_str)
+
+    def paintEvent(self, _):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        w, h = float(self.width()), float(self.height())
+        rect = QRectF(2.0, 2.0, w - 4.0, h - 4.0)
+
+        # 填充本体颜色
+        col = QColor(self._color_hex)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(col)
+        painter.drawRoundedRect(rect, 9.0, 9.0)
+
+        # 柔和外边框（确保高亮浅色与纯白也能清晰可见）
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(0, 0, 0, 45), 1.2))
+        painter.drawRoundedRect(rect, 9.0, 9.0)
+
+        # 高光内描边
+        painter.setPen(QPen(QColor(255, 255, 255, 130), 1.0))
+        painter.drawRoundedRect(rect.adjusted(1.0, 1.0, -1.0, -1.0), 8.0, 8.0)
+
+
+class LyricPreviewProgressBar(QWidget):
+    """用于设置界面实时预览的胶囊进度条组件"""
+    def __init__(self, start_hex: str = "#FFFFFF", end_hex: str = "#A0E6FF", parent=None):
+        super().__init__(parent)
+        self._start_hex = start_hex
+        self._end_hex = end_hex
+        self.setFixedHeight(12)
+
+    def set_colors(self, start_hex: str, end_hex: str):
+        self._start_hex = start_hex
+        self._end_hex = end_hex
+        self.update()
+
+    def paintEvent(self, _):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        w = float(self.width())
+        h = float(self.height())
+        bar_h = 4.0
+        y = (h - bar_h) / 2.0
+
+        # 背景轨道
+        track_rect = QRectF(0.0, y, w, bar_h)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 45))
+        painter.drawRoundedRect(track_rect, 2.0, 2.0)
+
+        # 进度填充条（58% 进度示意）
+        fill_w = max(bar_h, w * 0.58)
+        fill_rect = QRectF(0.0, y, fill_w, bar_h)
+        grad = QLinearGradient(0.0, 0.0, w, 0.0)
+        grad.setColorAt(0.0, QColor(self._start_hex))
+        grad.setColorAt(1.0, QColor(self._end_hex))
+        painter.setBrush(grad)
+        painter.drawRoundedRect(fill_rect, 2.0, 2.0)
+
+
 # ── 主设置对话框 ──────────────────────────────────────────────────────────────
 class SettingsDialog(QDialog):
     def __init__(
@@ -649,6 +743,20 @@ class SettingsDialog(QDialog):
         self._apply_worker: Optional[ApplyVersionWorker] = None
         self._override_provider_filter: str = "all"
         self._provider_chips: dict[str, QPushButton] = {}
+
+        # 主题色彩方案草稿状态
+        self._draft_theme_preset: str = settings.get_theme_preset()
+        self._draft_seed_color: str = settings.get_theme_seed_color()
+        self._draft_theme_colors: dict[str, str] = dict(settings.get_theme_colors())
+        if "custom" in color_theme.PRESET_THEMES and self._draft_theme_preset == "custom":
+            color_theme.PRESET_THEMES["custom"]["colors"] = dict(self._draft_theme_colors)
+            color_theme.PRESET_THEMES["custom"]["seed_color"] = self._draft_seed_color
+        self._color_editor_swatches: dict[str, ColorSwatchButton] = {}
+        self._color_editor_edits: dict[str, QLineEdit] = {}
+        self._preset_buttons: dict[str, QPushButton] = {}
+        self._preset_dots: dict[str, list[QFrame]] = {}
+        self._current_primary_hex: str = "#0B57D0"
+        self._current_container_hex: str = "#D3E3FD"
 
         self._build_ui()
 
@@ -730,14 +838,14 @@ class SettingsDialog(QDialog):
         header = QHBoxLayout()
         header.setSpacing(14)
 
-        # 蓝白圆角图标微标
-        icon_badge = QLabel("♫")
-        icon_badge.setFixedSize(40, 40)
-        icon_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_badge.setStyleSheet(
+        # 顶部圆角图标微标
+        self._icon_badge = QLabel("♫")
+        self._icon_badge.setFixedSize(40, 40)
+        self._icon_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._icon_badge.setStyleSheet(
             "background: #D3E3FD; color: #0B57D0; border-radius: 20px; font-size: 20px; font-weight: bold;"
         )
-        header.addWidget(icon_badge)
+        header.addWidget(self._icon_badge)
 
         v_titles = QVBoxLayout()
         v_titles.setSpacing(2)
@@ -767,11 +875,17 @@ class SettingsDialog(QDialog):
         nav_layout.setContentsMargins(4, 4, 4, 4)
         nav_layout.setSpacing(6)
 
-        self._btn_tab_font = QPushButton("字体设置")
-        self._btn_tab_ui   = QPushButton("歌词显示")
-        self._btn_tab_smtc = QPushButton("播放与同步")
+        self._btn_tab_font  = QPushButton("字体设置")
+        self._btn_tab_ui    = QPushButton("歌词显示")
+        self._btn_tab_theme = QPushButton("配色方案")
+        self._btn_tab_smtc  = QPushButton("播放与同步")
 
-        self._nav_buttons = [self._btn_tab_font, self._btn_tab_ui, self._btn_tab_smtc]
+        self._nav_buttons = [
+            self._btn_tab_font,
+            self._btn_tab_ui,
+            self._btn_tab_theme,
+            self._btn_tab_smtc,
+        ]
         for i, b in enumerate(self._nav_buttons):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setFixedHeight(36)
@@ -784,6 +898,7 @@ class SettingsDialog(QDialog):
         self._stack = QStackedWidget()
         self._stack.addWidget(self._create_font_page())
         self._stack.addWidget(self._make_scrollable(self._create_ui_page()))
+        self._stack.addWidget(self._make_scrollable(self._create_theme_page()))
         self._stack.addWidget(self._make_scrollable(self._create_smtc_page()))
         root.addWidget(self._stack, 1)
 
@@ -821,6 +936,9 @@ class SettingsDialog(QDialog):
         # 初始化激活第 1 个 Tab
         self._switch_tab(0)
 
+        # 同步应用当前主题色彩到窗口各控件与全局样式
+        self._sync_dialog_theme()
+
     # ── 导航切换 ─────────────────────────────────────────────────────────────
     def _switch_tab(self, idx: int):
         self._stack.setCurrentIndex(idx)
@@ -828,11 +946,13 @@ class SettingsDialog(QDialog):
         if isinstance(w, QScrollArea):
             w.verticalScrollBar().setValue(0)
         font_css = font_manager.get_font_css_family(self._font_items)
+        primary_hex = getattr(self, "_current_primary_hex", "#0B57D0")
+        container_hex = getattr(self, "_current_container_hex", "#D3E3FD")
         for i, b in enumerate(self._nav_buttons):
             if i == idx:
                 b.setStyleSheet(f"""
                     QPushButton {{
-                        background-color: #0B57D0;
+                        background-color: {primary_hex};
                         color: #FFFFFF;
                         border-radius: 18px;
                         font-family: {font_css};
@@ -855,25 +975,43 @@ class SettingsDialog(QDialog):
                         padding: 0 16px;
                     }}
                     QPushButton:hover {{
-                        background-color: #DFE7F5;
-                        color: #0B57D0;
+                        background-color: {container_hex};
+                        color: {primary_hex};
                     }}
                 """)
 
     def _refresh_dialog_fonts(self):
         """当字体优先级/启用状态在面板中被操作时，即时同步刷新全局与按钮控件的字体"""
         font_css = font_manager.get_font_css_family(self._font_items)
-        self.setStyleSheet(build_dialog_stylesheet(font_css))
+        primary_hex = getattr(self, "_current_primary_hex", "#0B57D0")
+        container_hex = getattr(self, "_current_container_hex", "#D3E3FD")
+        self.setStyleSheet(build_dialog_stylesheet(font_css, primary_hex, container_hex))
         self.setFont(font_manager.make_app_font(13, families=[it.family for it in self._font_items if it.enabled and it.is_valid] + font_manager.SYSTEM_FALLBACK_FAMILIES))
         # 刷新三卡切换按钮
         self._switch_tab(self._stack.currentIndex())
         # 刷新底部按钮
         if hasattr(self, "_btn_reset"):
-            apply_pill_outlined(self._btn_reset, font_css)
+            self._btn_reset.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #FFFFFF;
+                    color: {primary_hex};
+                    border: 1.5px solid {primary_hex};
+                    border-radius: 19px;
+                    padding: 8px 22px;
+                    font-family: {font_css};
+                    font-size: 13px;
+                    font-weight: 600;
+                    outline: none;
+                }}
+                QPushButton:hover {{
+                    background-color: {container_hex};
+                    border-color: {primary_hex};
+                }}
+            """)
         if hasattr(self, "_btn_cancel"):
             apply_pill_tonal(self._btn_cancel, font_css)
         if hasattr(self, "_btn_save"):
-            apply_pill_primary(self._btn_save, font_css)
+            apply_pill_primary(self._btn_save, font_css, primary_hex)
         if hasattr(self, "_btn_folder"):
             apply_pill_banner_btn(self._btn_folder, font_css)
         if hasattr(self, "_btn_rescan"):
@@ -992,9 +1130,11 @@ class SettingsDialog(QDialog):
         badge = QLabel(f"#{index + 1}" if item.enabled else "关")
         badge.setFixedSize(38, 26)
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        primary_hex = getattr(self, "_current_primary_hex", "#0B57D0")
+        container_hex = getattr(self, "_current_container_hex", "#D3E3FD")
         if item.enabled:
             badge.setStyleSheet(
-                "background: #D3E3FD; color: #041E49; border-radius: 13px; font-weight: bold; font-size: 12px;"
+                f"background: {container_hex}; color: {primary_hex}; border-radius: 13px; font-weight: bold; font-size: 12px;"
             )
         else:
             badge.setStyleSheet(
@@ -1843,6 +1983,8 @@ class SettingsDialog(QDialog):
     def _set_font_mode(self, mode: str):
         self._font_mode = mode
         font_css = font_manager.get_font_css_family(self._font_items)
+        primary_hex = getattr(self, "_current_primary_hex", "#0B57D0")
+        container_hex = getattr(self, "_current_container_hex", "#D3E3FD")
         if mode == "fullscreen":
             if hasattr(self, "_panel_ov"):
                 self._panel_ov.setVisible(False)
@@ -1851,7 +1993,7 @@ class SettingsDialog(QDialog):
             if hasattr(self, "_btn_mode_fs"):
                 self._btn_mode_fs.setStyleSheet(f"""
                     QPushButton {{
-                        background-color: #0B57D0;
+                        background-color: {primary_hex};
                         color: #FFFFFF;
                         border-radius: 13px;
                         padding: 0 12px;
@@ -1874,7 +2016,7 @@ class SettingsDialog(QDialog):
                         border: none;
                     }}
                     QPushButton:hover {{
-                        background-color: #DFE7F5;
+                        background-color: {container_hex};
                     }}
                 """)
         else:
@@ -1885,7 +2027,7 @@ class SettingsDialog(QDialog):
             if hasattr(self, "_btn_mode_ov"):
                 self._btn_mode_ov.setStyleSheet(f"""
                     QPushButton {{
-                        background-color: #0B57D0;
+                        background-color: {primary_hex};
                         color: #FFFFFF;
                         border-radius: 13px;
                         padding: 0 12px;
@@ -1908,7 +2050,7 @@ class SettingsDialog(QDialog):
                         border: none;
                     }}
                     QPushButton:hover {{
-                        background-color: #DFE7F5;
+                        background-color: {container_hex};
                     }}
                 """)
         self._update_ui_preview()
@@ -1929,7 +2071,535 @@ class SettingsDialog(QDialog):
             self._lbl_prev_roma.setFont(font_manager.make_app_font(ctx_sz, bold=False, families=active_families))
             self._lbl_prev_trans.setFont(font_manager.make_app_font(ctx_sz, bold=False, families=active_families))
 
-    # ── TAB 3: 播放器与同步设置 ───────────────────────────────────────────────
+    # ── TAB 3: 配色方案与 MD 色彩自动生成 ──────────────────────────────────────
+    def _create_theme_page(self) -> QWidget:
+        page = QWidget()
+        l = QVBoxLayout(page)
+        l.setContentsMargins(0, 4, 0, 0)
+        l.setSpacing(14)
+
+        # 1. 预设配色方案卡片
+        l.addWidget(self._create_theme_presets_card())
+
+        # 2. Material Design 单颜色自动生成卡片
+        l.addWidget(self._create_theme_md_generator_card())
+
+        # 3. 实时歌词视觉预览卡片
+        l.addWidget(self._create_theme_preview_card())
+
+        # 4. 自定义色彩细节调整卡片
+        l.addWidget(self._create_theme_details_card())
+
+        # 初始化色阶与预览
+        self._refresh_theme_ui()
+
+        return page
+
+    def _create_theme_presets_card(self) -> QWidget:
+        card = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(18, 14, 18, 14)
+        cl.setSpacing(12)
+
+        top_h = QHBoxLayout()
+        v_title = QVBoxLayout()
+        v_title.setSpacing(2)
+        lbl_title = QLabel("预设配色方案")
+        lbl_title.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
+        lbl_desc = QLabel("点击选择官方精选调色，或在预设基础上自由修改微调")
+        lbl_desc.setStyleSheet("font-size: 11px; color: #6E7781;")
+        v_title.addWidget(lbl_title)
+        v_title.addWidget(lbl_desc)
+        top_h.addLayout(v_title)
+        top_h.addStretch()
+        cl.addLayout(top_h)
+
+        # 预设卡片网格
+        from PyQt6.QtWidgets import QGridLayout
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+
+        presets_items = list(color_theme.PRESET_THEMES.items())
+
+        self._preset_buttons.clear()
+        self._preset_dots.clear()
+        for idx, (k, pinfo) in enumerate(presets_items):
+            btn = QPushButton()
+            btn.setFixedHeight(44)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            bl = QHBoxLayout(btn)
+            bl.setContentsMargins(12, 6, 12, 6)
+            bl.setSpacing(8)
+
+            lbl_name = QLabel(pinfo.get("name", k))
+            lbl_name.setStyleSheet("font-size: 12px; font-weight: 600; background: transparent; border: none;")
+            bl.addWidget(lbl_name)
+            bl.addStretch()
+
+            cols = self._draft_theme_colors if k == "custom" else pinfo.get("colors", {})
+            dots = [
+                cols.get("lyric_active", "#FFFFFF"),
+                cols.get("lyric_secondary", "#C3E1FF"),
+                cols.get("accent", "#78CDFF"),
+            ]
+            dot_frames = []
+            for dot_col in dots:
+                dot = QFrame()
+                dot.setFixedSize(10, 10)
+                dot.setStyleSheet(
+                    f"background-color: {dot_col}; border-radius: 5px; border: 1px solid rgba(0,0,0,0.18);"
+                )
+                bl.addWidget(dot)
+                dot_frames.append(dot)
+
+            self._preset_dots[k] = dot_frames
+            btn.clicked.connect(lambda _, key=k: self._apply_preset_draft(key))
+            self._preset_buttons[k] = btn
+
+            row = idx // 2
+            col = idx % 2
+            grid.addWidget(btn, row, col)
+
+        cl.addLayout(grid)
+        return card
+
+    def _create_theme_md_generator_card(self) -> QWidget:
+        card = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(18, 14, 18, 14)
+        cl.setSpacing(10)
+
+        v_title = QVBoxLayout()
+        v_title.setSpacing(2)
+        lbl_title = QLabel("配色生成")
+        lbl_title.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
+        lbl_desc = QLabel("可选取或输入任一基准色")
+        lbl_desc.setStyleSheet("font-size: 11px; color: #6E7781;")
+        v_title.addWidget(lbl_title)
+        v_title.addWidget(lbl_desc)
+        cl.addLayout(v_title)
+
+        # 种子色输入行：色块 + HEX 输入框 + 优雅提示
+        row_seed = QHBoxLayout()
+        row_seed.setSpacing(10)
+
+        lbl_seed = QLabel("种子颜色：")
+        lbl_seed.setStyleSheet("font-size: 13px; font-weight: 600; color: #1B1F24;")
+        row_seed.addWidget(lbl_seed)
+
+        self._btn_seed_swatch = ColorSwatchButton(self._draft_seed_color, size=34)
+        self._btn_seed_swatch.colorChanged.connect(self._on_seed_color_picked)
+        row_seed.addWidget(self._btn_seed_swatch)
+
+        self._edit_seed_hex = QLineEdit(self._draft_seed_color)
+        self._edit_seed_hex.setFixedWidth(96)
+        self._edit_seed_hex.setMaxLength(7)
+        self._edit_seed_hex.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._edit_seed_hex.setStyleSheet("""
+            QLineEdit {
+                padding: 6px 10px;
+                border-radius: 12px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+        """)
+        self._edit_seed_hex.textEdited.connect(self._on_seed_hex_edited)
+        self._edit_seed_hex.editingFinished.connect(self._on_seed_hex_finished)
+        row_seed.addWidget(self._edit_seed_hex)
+
+        lbl_hint = QLabel("（修改代码或点选色块即时自动推导）")
+        lbl_hint.setStyleSheet("font-size: 11px; color: #8C96AB;")
+        row_seed.addWidget(lbl_hint)
+
+        row_seed.addStretch()
+        cl.addLayout(row_seed)
+
+        return card
+
+    def _create_theme_preview_card(self) -> QWidget:
+        card = MD3Card(bg="#111422", border="#262C42", radius=18)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(20, 16, 20, 16)
+        cl.setSpacing(10)
+
+        lbl_song_info = QLabel("♫ 不可解 — 花谱")
+        lbl_song_info.setStyleSheet("color: #8C96AB; font-size: 12px; font-weight: 500; background: transparent; border: none;")
+        cl.addWidget(lbl_song_info)
+
+        self._prev_cur_line = QLabel("不可解で不完全な魔法")
+        self._prev_cur_line.setStyleSheet("font-size: 20px; font-weight: bold; background: transparent; border: none; color: #FFFFFF;")
+        cl.addWidget(self._prev_cur_line)
+
+        self._prev_progress = LyricPreviewProgressBar("#FFFFFF", "#A0E6FF")
+        cl.addWidget(self._prev_progress)
+
+        self._prev_trans_line = QLabel("不可解的、不完全的魔法")
+        self._prev_trans_line.setStyleSheet("font-size: 13px; background: transparent; border: none; color: #C3E1FF;")
+        cl.addWidget(self._prev_trans_line)
+
+        self._prev_next_line = QLabel("名前のない花のような")
+        self._prev_next_line.setStyleSheet("font-size: 13px; background: transparent; border: none; color: #A0A8B8;")
+        cl.addWidget(self._prev_next_line)
+
+        return card
+
+    def _create_theme_details_card(self) -> QWidget:
+        card = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(18, 14, 18, 14)
+        cl.setSpacing(12)
+
+        v_title = QVBoxLayout()
+        v_title.setSpacing(2)
+        lbl_title = QLabel("自定义色彩")
+        lbl_title.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
+        lbl_desc = QLabel("可修改单独配色HEX")
+        lbl_desc.setStyleSheet("font-size: 11px; color: #6E7781;")
+        v_title.addWidget(lbl_title)
+        v_title.addWidget(lbl_desc)
+        cl.addLayout(v_title)
+
+        roles = [
+            ("lyric_active", "主要行"),
+            ("lyric_inactive", "次要行"),
+            ("lyric_secondary", "译文注音行"),
+            ("progress_start", "进度条起始"),
+            ("progress_end", "进度条结束"),
+            ("accent", "辅助色"),
+        ]
+
+        self._color_editor_swatches.clear()
+        self._color_editor_edits.clear()
+
+        for key, name in roles:
+            cur_col = self._draft_theme_colors.get(key, "#FFFFFF")
+
+            row_frame = QFrame()
+            row_frame.setStyleSheet("""
+                QFrame {
+                    background: #F8FAFD;
+                    border: 1px solid #E1E8F5;
+                    border-radius: 12px;
+                }
+            """)
+            rl = QHBoxLayout(row_frame)
+            rl.setContentsMargins(16, 7, 16, 7)
+            rl.setSpacing(12)
+
+            lbl_rname = QLabel(name)
+            lbl_rname.setStyleSheet("font-size: 13px; font-weight: 600; color: #1B1F24; background: transparent; border: none;")
+            rl.addWidget(lbl_rname, 1)
+
+            # 色块按钮
+            swatch = ColorSwatchButton(cur_col, size=32)
+            swatch.colorChanged.connect(lambda hex_val, rk=key: self._on_color_swatch_changed(rk, hex_val))
+            rl.addWidget(swatch)
+            self._color_editor_swatches[key] = swatch
+
+            # 十六进制输入框
+            edit = QLineEdit(cur_col)
+            edit.setFixedWidth(96)
+            edit.setMaxLength(7)
+            edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            edit.setStyleSheet("""
+                QLineEdit {
+                    padding: 6px 10px;
+                    border-radius: 12px;
+                    font-size: 13px;
+                    font-weight: 600;
+                }
+            """)
+            edit.textEdited.connect(lambda text, rk=key: self._on_color_hex_edited(rk, text))
+            rl.addWidget(edit)
+            self._color_editor_edits[key] = edit
+
+            cl.addWidget(row_frame)
+
+        return card
+
+    # ── 配色方案交互事件处理 ───────────────────────────────────────────────────
+    def _on_seed_color_picked(self, hex_val: str):
+        self._draft_seed_color = hex_val.upper()
+        if hasattr(self, "_edit_seed_hex"):
+            self._edit_seed_hex.blockSignals(True)
+            self._edit_seed_hex.setText(self._draft_seed_color)
+            self._edit_seed_hex.blockSignals(False)
+        self._generate_from_seed(self._draft_seed_color)
+
+    def _on_seed_hex_edited(self, text: str):
+        text = text.strip()
+        if len(text) == 7 and color_theme.is_valid_hex(text):
+            normalized = color_theme.normalize_hex(text)
+            self._draft_seed_color = normalized
+            if hasattr(self, "_btn_seed_swatch"):
+                self._btn_seed_swatch.set_color(normalized)
+            self._generate_from_seed(normalized)
+
+    def _on_seed_hex_finished(self):
+        if hasattr(self, "_edit_seed_hex"):
+            val = self._edit_seed_hex.text().strip()
+            if color_theme.is_valid_hex(val):
+                normalized = color_theme.normalize_hex(val)
+                self._edit_seed_hex.blockSignals(True)
+                self._edit_seed_hex.setText(normalized)
+                self._edit_seed_hex.blockSignals(False)
+                if hasattr(self, "_btn_seed_swatch"):
+                    self._btn_seed_swatch.set_color(normalized)
+                self._generate_from_seed(normalized)
+            else:
+                self._edit_seed_hex.blockSignals(True)
+                self._edit_seed_hex.setText(self._draft_seed_color)
+                self._edit_seed_hex.blockSignals(False)
+
+    def _generate_from_seed(self, seed_hex: str):
+        """核心业务功能：调用 MD3 色彩科学算法根据单一种子颜色自动生成整套配色并同步界面"""
+        seed_hex = color_theme.normalize_hex(seed_hex)
+        self._draft_seed_color = seed_hex
+
+        if hasattr(self, "_edit_seed_hex"):
+            self._edit_seed_hex.blockSignals(True)
+            self._edit_seed_hex.setText(seed_hex)
+            self._edit_seed_hex.blockSignals(False)
+        if hasattr(self, "_btn_seed_swatch"):
+            self._btn_seed_swatch.set_color(seed_hex)
+
+        scheme = color_theme.generate_md_color_scheme(seed_hex)
+        lyrik_roles = scheme["lyrik_roles"]
+
+        # 更新草稿颜色与自定义预设标识
+        self._draft_theme_colors.update(lyrik_roles)
+        self._draft_theme_preset = "custom"
+        if "custom" in color_theme.PRESET_THEMES:
+            color_theme.PRESET_THEMES["custom"]["colors"].update(self._draft_theme_colors)
+            color_theme.PRESET_THEMES["custom"]["seed_color"] = seed_hex
+
+        # 刷新所有色块、输入框与歌词预览卡片
+        self._refresh_theme_ui()
+
+        # 同步更新设置对话框自身的配色
+        self._sync_dialog_theme()
+
+    def _apply_preset_draft(self, preset_key: str):
+        preset = color_theme.get_preset(preset_key)
+        self._draft_theme_preset = preset_key
+        self._draft_seed_color = preset["seed_color"]
+        self._draft_theme_colors = dict(preset["colors"])
+
+        if hasattr(self, "_edit_seed_hex"):
+            self._edit_seed_hex.blockSignals(True)
+            self._edit_seed_hex.setText(self._draft_seed_color)
+            self._edit_seed_hex.blockSignals(False)
+        if hasattr(self, "_btn_seed_swatch"):
+            self._btn_seed_swatch.set_color(self._draft_seed_color)
+
+        self._refresh_theme_ui()
+        self._sync_dialog_theme()
+
+    def _on_color_swatch_changed(self, role: str, new_hex: str):
+        self._draft_theme_colors[role] = new_hex
+        self._draft_theme_preset = "custom"
+        if "custom" in color_theme.PRESET_THEMES:
+            color_theme.PRESET_THEMES["custom"]["colors"][role] = new_hex
+        if role in self._color_editor_edits:
+            self._color_editor_edits[role].blockSignals(True)
+            self._color_editor_edits[role].setText(new_hex)
+            self._color_editor_edits[role].blockSignals(False)
+        self._refresh_theme_preset_buttons()
+        self._update_theme_preview()
+
+    def _on_color_hex_edited(self, role: str, text: str):
+        if color_theme.is_valid_hex(text):
+            normalized = color_theme.normalize_hex(text)
+            self._draft_theme_colors[role] = normalized
+            self._draft_theme_preset = "custom"
+            if "custom" in color_theme.PRESET_THEMES:
+                color_theme.PRESET_THEMES["custom"]["colors"][role] = normalized
+            if role in self._color_editor_swatches:
+                self._color_editor_swatches[role].set_color(normalized)
+            self._refresh_theme_preset_buttons()
+            self._update_theme_preview()
+
+    def _sync_dialog_theme(self):
+        """将设置对话框自身的视觉主题（标题徽标、导航标签、按钮、开关、滑块、聚焦框等）与当前配色方案同步"""
+        seed_hex = self._draft_seed_color or "#0B57D0"
+        scheme = color_theme.generate_md_color_scheme(seed_hex)
+        primary_hex = scheme["md3_light"]["primary"]
+        container_hex = scheme["md3_light"]["primary_container"]
+        self._current_primary_hex = primary_hex
+        self._current_container_hex = container_hex
+
+        font_css = font_manager.get_font_css_family(self._font_items)
+        self.setStyleSheet(build_dialog_stylesheet(font_css, primary_hex, container_hex))
+
+        if hasattr(self, "_icon_badge") and self._icon_badge:
+            self._icon_badge.setStyleSheet(
+                f"background: {container_hex}; color: {primary_hex}; border-radius: 20px; font-size: 20px; font-weight: bold;"
+            )
+
+        if hasattr(self, "_nav_buttons") and self._nav_buttons and hasattr(self, "_stack"):
+            cur_idx = self._stack.currentIndex()
+            for i, b in enumerate(self._nav_buttons):
+                if i == cur_idx:
+                    b.setStyleSheet(f"""
+                        QPushButton {{
+                            background-color: {primary_hex};
+                            color: #FFFFFF;
+                            border-radius: 18px;
+                            font-family: {font_css};
+                            font-weight: 600;
+                            font-size: 13px;
+                            border: none;
+                            padding: 0 16px;
+                        }}
+                    """)
+                else:
+                    b.setStyleSheet(f"""
+                        QPushButton {{
+                            background-color: transparent;
+                            color: #475467;
+                            border-radius: 18px;
+                            font-family: {font_css};
+                            font-weight: 500;
+                            font-size: 13px;
+                            border: none;
+                            padding: 0 16px;
+                        }}
+                        QPushButton:hover {{
+                            background-color: {container_hex};
+                            color: {primary_hex};
+                        }}
+                    """)
+
+        if hasattr(self, "_btn_save") and self._btn_save:
+            apply_pill_primary(self._btn_save, font_css, primary_hex)
+
+        if hasattr(self, "_btn_reset") and self._btn_reset:
+            self._btn_reset.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #FFFFFF;
+                    color: {primary_hex};
+                    border: 1.5px solid {primary_hex};
+                    border-radius: 19px;
+                    padding: 8px 22px;
+                    font-family: {font_css};
+                    font-size: 13px;
+                    font-weight: 600;
+                    outline: none;
+                }}
+                QPushButton:hover {{
+                    background-color: {container_hex};
+                    border-color: {primary_hex};
+                }}
+            """)
+
+        if hasattr(self, "_lbl_op_val") and self._lbl_op_val:
+            self._lbl_op_val.setStyleSheet(
+                f"background: {container_hex}; color: {primary_hex}; border-radius: 12px; padding: 2px 10px; font-weight: bold; font-size: 12px;"
+            )
+
+        MD3Switch.set_global_active_color(primary_hex)
+        for sw in self.findChildren(MD3Switch):
+            sw.update()
+
+        if hasattr(self, "_font_mode"):
+            self._set_font_mode(self._font_mode)
+
+        if hasattr(self, "_font_list_layout"):
+            self._render_font_items()
+
+        self._refresh_theme_preset_buttons()
+
+    def _refresh_theme_preset_buttons(self):
+        font_css = font_manager.get_font_css_family(self._font_items)
+        primary_hex = getattr(self, "_current_primary_hex", "#0B57D0")
+        container_hex = getattr(self, "_current_container_hex", "#D3E3FD")
+
+        # 及时同步自定义配色的摘要色指示圆点
+        if hasattr(self, "_preset_dots") and "custom" in self._preset_dots:
+            active_col = self._draft_theme_colors.get("lyric_active", "#FFFFFF")
+            sec_col = self._draft_theme_colors.get("lyric_secondary", "#C3E1FF")
+            acc_col = self._draft_theme_colors.get("accent", "#78CDFF")
+            summary_cols = [active_col, sec_col, acc_col]
+            for dot, col_str in zip(self._preset_dots["custom"], summary_cols):
+                dot.setStyleSheet(
+                    f"background-color: {col_str}; border-radius: 5px; border: 1px solid rgba(0,0,0,0.18);"
+                )
+
+        for k, btn in self._preset_buttons.items():
+            is_active = (k == self._draft_theme_preset)
+            if is_active:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {container_hex};
+                        border: 1.8px solid {primary_hex};
+                        border-radius: 12px;
+                        font-family: {font_css};
+                    }}
+                """)
+            else:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #FFFFFF;
+                        border: 1.2px solid #DCE3EE;
+                        border-radius: 12px;
+                        font-family: {font_css};
+                    }}
+                    QPushButton:hover {{
+                        background-color: #F4F7FB;
+                        border-color: {primary_hex};
+                    }}
+                """)
+
+    def _update_theme_preview(self):
+        if not hasattr(self, "_prev_cur_line"):
+            return
+
+        c_act = self._draft_theme_colors.get("lyric_active", "#FFFFFF")
+        c_inact = self._draft_theme_colors.get("lyric_inactive", "#A0A8B8")
+        c_sec = self._draft_theme_colors.get("lyric_secondary", "#C3E1FF")
+        c_p1 = self._draft_theme_colors.get("progress_start", "#FFFFFF")
+        c_p2 = self._draft_theme_colors.get("progress_end", "#A0E6FF")
+        c_acc = self._draft_theme_colors.get("accent", "#78CDFF")
+
+        self._prev_cur_line.setStyleSheet(
+            f"font-size: 20px; font-weight: bold; background: transparent; border: none; color: {c_act};"
+        )
+        self._prev_trans_line.setStyleSheet(
+            f"font-size: 13px; background: transparent; border: none; color: {c_sec};"
+        )
+        self._prev_next_line.setStyleSheet(
+            f"font-size: 13px; background: transparent; border: none; color: {c_inact};"
+        )
+        self._prev_progress.set_colors(c_p1, c_p2)
+
+    def _refresh_theme_ui(self):
+        """全量同步当前配色方案到所有输入控件与预览卡片"""
+        # 1. 刷新预设按钮激活状态
+        self._refresh_theme_preset_buttons()
+
+        # 2. 刷新种子输入色
+        if hasattr(self, "_btn_seed_swatch"):
+            self._btn_seed_swatch.set_color(self._draft_seed_color)
+        if hasattr(self, "_edit_seed_hex"):
+            self._edit_seed_hex.blockSignals(True)
+            self._edit_seed_hex.setText(self._draft_seed_color)
+            self._edit_seed_hex.blockSignals(False)
+
+        # 3. 刷新各个角色色块与文本框
+        for rk, swatch in self._color_editor_swatches.items():
+            c = self._draft_theme_colors.get(rk, "#FFFFFF")
+            swatch.set_color(c)
+        for rk, edit in self._color_editor_edits.items():
+            c = self._draft_theme_colors.get(rk, "#FFFFFF")
+            edit.blockSignals(True)
+            edit.setText(c)
+            edit.blockSignals(False)
+
+        # 4. 刷新实时歌词预览
+        self._update_theme_preview()
+
+    # ── TAB 4: 播放器与同步设置 ───────────────────────────────────────────────
     def _create_smtc_page(self) -> QWidget:
         page = QWidget()
         l = QVBoxLayout(page)
@@ -2273,6 +2943,9 @@ class SettingsDialog(QDialog):
         self._render_font_items()
         self._refresh_dialog_fonts()
 
+        # 恢复默认经典配色
+        self._apply_preset_draft("classic")
+
     # ── 保存并应用 ───────────────────────────────────────────────────────────
     def _save_and_apply(self):
         # 1. 字体配置持久化
@@ -2309,5 +2982,10 @@ class SettingsDialog(QDialog):
                 db_cache.remove_song_offset(self._current_title, self._current_artist)
 
         db_cache.set_all_song_offsets(self._song_offsets_draft)
+
+        # 4. 主题与配色方案持久化
+        settings.set_theme_preset(self._draft_theme_preset)
+        settings.set_theme_seed_color(self._draft_seed_color)
+        settings.set_theme_colors(self._draft_theme_colors)
 
         self.accept()

@@ -58,14 +58,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: LyrikFlow-Windows-x64
-          path: dist/LyrikFlow-Windows-x64.zip
+          path: dist/LyrikFlow.exe
           if-no-files-found: error
 
       - name: Publish Release Assets
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/LyrikFlow-Windows-x64.zip
+          files: |
+            dist/LyrikFlow.exe
+            dist/LyrikFlow-Windows-x64.zip
           generate_release_notes: true
           draft: false
           prerelease: false

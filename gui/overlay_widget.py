@@ -75,6 +75,9 @@ class OverlayWidget(QWidget):
         self._font_sub = self._create_round_font(settings.get_font_size_context(), bold=False)
         self._is_verbatim_song: bool = False
 
+        # 主题色彩方案
+        self._load_theme_colors()
+
         # 封面加载动画状态
         self._loading_progress: float = 1.0
         self._target_loading_progress: float = 1.0
@@ -353,7 +356,9 @@ class OverlayWidget(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(ring_rect)
 
-            arc_pen = QPen(QColor(120, 205, 255, int(self._opacity * 230)))
+            arc_col = QColor(self._color_accent)
+            arc_col.setAlpha(int(self._opacity * 230))
+            arc_pen = QPen(arc_col)
             arc_pen.setWidthF(2.5)
             arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(arc_pen)
@@ -432,17 +437,23 @@ class OverlayWidget(QWidget):
         text_h = fm_m.height() + (fm_s.height() + 4 if has_sub else 0)
         t_base_y = (h - text_h) / 2.0 + fm_m.ascent()
 
+        col_act = self._color_active
+        col_sec = self._color_secondary
+
         painter.setFont(self._font_main)
-        painter.setPen(QColor(255, 255, 255, int(self._opacity * 255)))
+        painter.setPen(QColor(col_act.red(), col_act.green(), col_act.blue(), int(self._opacity * 255)))
         painter.drawText(int(text_x), int(t_base_y), title)
 
         if has_sub:
             s_base_y = t_base_y + fm_m.descent() + 4 + fm_s.ascent()
             painter.setFont(self._font_sub)
             if is_instrumental:
-                painter.setPen(QColor(120, 205, 255, int(self._opacity * 230)))  # 纯音乐状态使用强调色
+                c_acc = QColor(self._color_accent)
+                c_acc.setAlpha(int(self._opacity * 230))
+                painter.setPen(c_acc)  # 纯音乐状态使用强调色
             else:
-                painter.setPen(QColor(255, 255, 255, int(self._opacity * 130)))
+                c_sec_pen = QColor(col_sec.red(), col_sec.green(), col_sec.blue(), int(self._opacity * 220))
+                painter.setPen(c_sec_pen)
             painter.drawText(int(text_x), int(s_base_y), artist)
 
     # ── 歌词展示阶段 ─────────────────────────────────────────────
@@ -654,11 +665,15 @@ class OverlayWidget(QWidget):
         else:
             progress_x = start_x
 
-        # ── 3. 样式分支：逐字歌曲 vs 非逐字歌曲 ──
+        # ── 3. 样式：逐字歌词 ──
+        col_act = self._color_active
+        col_inact = self._color_inactive
+        col_sec = self._color_secondary
+
+
         if self._is_verbatim_song:
-            # ── 模式 A：逐字歌词 ──
             painter.setFont(self._font_main)
-            base_col = QColor(255, 255, 255, int(alpha * 85))
+            base_col = QColor(col_inact.red(), col_inact.green(), col_inact.blue(), int(alpha * 205))
             painter.setPen(base_col)
             painter.drawText(int(start_x), int(main_baseline), text)
 
@@ -668,35 +683,28 @@ class OverlayWidget(QWidget):
 
                 feather_px = 16.0
                 sweep = QLinearGradient(start_x, 0, max(start_x + 10.0, progress_x + feather_px), 0)
-                sweep.setColorAt(0.0, QColor(255, 255, 255, int(alpha * 255)))
+                c_act_full = QColor(col_act.red(), col_act.green(), col_act.blue(), int(alpha * 235))
+                c_act_fade = QColor(col_act.red(), col_act.green(), col_act.blue(), int(alpha * 190))
+                c_act_zero = QColor(col_act.red(), col_act.green(), col_act.blue(), 0)
+
+                sweep.setColorAt(0.0, c_act_full)
 
                 dist = max(1.0, progress_x - start_x)
                 p_start = max(0.0, (dist - feather_px) / (dist + feather_px))
                 p_end = min(1.0, dist / (dist + feather_px))
 
-                sweep.setColorAt(p_start, QColor(255, 255, 255, int(alpha * 255)))
-                sweep.setColorAt(p_end, QColor(255, 255, 255, int(alpha * 160)))
-                sweep.setColorAt(1.0, QColor(255, 255, 255, 0))
+                sweep.setColorAt(p_start, c_act_full)
+                sweep.setColorAt(p_end, c_act_fade)
+                sweep.setColorAt(1.0, c_act_zero)
 
                 painter.setPen(QPen(QBrush(sweep), 0))
                 painter.drawText(int(start_x), int(main_baseline), text)
 
-                bloom_col = QColor(255, 255, 255, int(alpha * 36))
-                painter.setPen(bloom_col)
-                for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                    painter.drawText(int(start_x + dx), int(main_baseline + dy), text)
-
                 painter.restore()
         else:
-            # ── 模式 B：非逐字歌词，整句纯白高亮 + 下方圆润单句胶囊进度条 ──
             painter.setFont(self._font_main)
-            painter.setPen(QColor(255, 255, 255, int(alpha * 240)))
+            painter.setPen(QColor(col_act.red(), col_act.green(), col_act.blue(), int(alpha * 235)))
             painter.drawText(int(start_x), int(main_baseline), text)
-
-            bloom_col = QColor(255, 255, 255, int(alpha * 30))
-            painter.setPen(bloom_col)
-            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                painter.drawText(int(start_x + dx), int(main_baseline + dy), text)
 
             # 单句播放时间进度
             if current_line_obj:
@@ -726,8 +734,10 @@ class OverlayWidget(QWidget):
                 fill_path.addRoundedRect(fill_rect, bar_r, bar_r)
 
                 fill_grad = QLinearGradient(bar_x, 0, bar_x + bar_w, 0)
-                fill_grad.setColorAt(0.0, QColor(255, 255, 255, int(alpha * 230)))
-                fill_grad.setColorAt(1.0, QColor(160, 230, 255, int(alpha * 255)))
+                cp1 = self._color_prog_start
+                cp2 = self._color_prog_end
+                fill_grad.setColorAt(0.0, QColor(cp1.red(), cp1.green(), cp1.blue(), int(alpha * 230)))
+                fill_grad.setColorAt(1.0, QColor(cp2.red(), cp2.green(), cp2.blue(), int(alpha * 235)))
                 painter.fillPath(fill_path, QBrush(fill_grad))
 
         # ── 4. 译文渲染 ──
@@ -741,14 +751,12 @@ class OverlayWidget(QWidget):
                 tr_x = (w - tr_w) / 2.0
             tr_baseline = base_y + fm_m.height() + 6 + fm_s.ascent()
 
-            ratio = min(1.0, max(0.0, (progress_x - start_x) / max(1.0, float(main_w))))
-            tr_alpha = int(alpha * (100 + int(ratio * 75)))
-            painter.setPen(QColor(255, 255, 255, tr_alpha))
+            tr_alpha = int(alpha * 235)
+            painter.setPen(QColor(col_sec.red(), col_sec.green(), col_sec.blue(), tr_alpha))
             painter.drawText(int(tr_x), int(tr_baseline), trans)
 
     # ── 右下角半矩形缩放控件绘制 ─────────────────────────────────────────────
     def _draw_resize_grip(self, painter: QPainter, w: int, h: int) -> None:
-        """在右下角绘制精致的半矩形折角直角手柄 (⌟)"""
         grip_x = w - 16
         grip_y = h - 16
         length = 10
@@ -911,7 +919,17 @@ class OverlayWidget(QWidget):
         self._opacity = max(0.15, min(1.0, float(opacity)))
         self.update()
 
+    def _load_theme_colors(self) -> None:
+        """加载自定义/MD3配色方案"""
+        self._color_active = QColor(settings.get_theme_color("lyric_active", "#FFFFFF"))
+        self._color_inactive = QColor(settings.get_theme_color("lyric_inactive", "#A0A8B8"))
+        self._color_secondary = QColor(settings.get_theme_color("lyric_secondary", "#C3E1FF"))
+        self._color_prog_start = QColor(settings.get_theme_color("progress_start", "#FFFFFF"))
+        self._color_prog_end = QColor(settings.get_theme_color("progress_end", "#A0E6FF"))
+        self._color_accent = QColor(settings.get_theme_color("accent", "#78CDFF"))
+
     def reload_settings(self):
+        self._load_theme_colors()
         self._opacity = settings.get_opacity()
         self._font_size = settings.get_font_size_current()
         self._font_main = self._create_round_font(self._font_size, bold=True)

@@ -63,6 +63,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "smtc": {
         "watched_apps": ["cloudmusic.exe"],
     },
+    "theme": {
+        "preset": "classic",
+        "seed_color": "#0B57D0",
+        "colors": {
+            "lyric_active": "#FFFFFF",
+            "lyric_inactive": "#A0A8B8",
+            "lyric_secondary": "#C3E1FF",
+            "progress_start": "#FFFFFF",
+            "progress_end": "#A0E6FF",
+            "accent": "#78CDFF",
+        },
+    },
 }
 
 _lock = threading.RLock()
@@ -479,3 +491,41 @@ def set_all_song_offsets(offsets: dict[str, int]) -> None:
 def set_font_configs(configs: list[dict]) -> None:
     """保存字体配置列表"""
     _set(["font", "configs"], configs)
+
+
+# ── 主题与配色方案接口 ────────────────────────────────────────────────────────
+def get_theme_preset() -> str:
+    """获取当前选择的配色预设名称 ('classic', 'md_blue', 'sakura', 'custom' 等)"""
+    return str(_get(["theme", "preset"], "classic"))
+
+def set_theme_preset(v: str) -> None:
+    """保存当前选择的配色预设名称"""
+    _set(["theme", "preset"], str(v))
+
+def get_theme_seed_color() -> str:
+    """获取 MD 种子颜色 (例如 '#0B57D0')"""
+    return str(_get(["theme", "seed_color"], "#0B57D0"))
+
+def set_theme_seed_color(v: str) -> None:
+    """保存 MD 种子颜色"""
+    _set(["theme", "seed_color"], str(v))
+
+def get_theme_colors() -> dict[str, str]:
+    """获取当前生效的歌词各角色颜色字典"""
+    from core.color_theme import get_default_colors
+    val = _get(["theme", "colors"], None)
+    default_colors = get_default_colors()
+    if isinstance(val, dict):
+        res = dict(default_colors)
+        res.update({str(k): str(v) for k, v in val.items() if v})
+        return res
+    return default_colors
+
+def set_theme_colors(colors: dict[str, str]) -> None:
+    """全量更新歌词各角色颜色配置"""
+    _set(["theme", "colors"], {str(k): str(v) for k, v in colors.items() if v})
+
+def get_theme_color(role: str, default: str = "#FFFFFF") -> str:
+    """获取指定角色的十六进制颜色字符串"""
+    colors = get_theme_colors()
+    return colors.get(role, default)

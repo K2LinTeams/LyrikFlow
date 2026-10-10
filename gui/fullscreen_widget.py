@@ -68,6 +68,9 @@ class LyricsCanvas(QWidget):
         self._font_trans_cur  = _make_font(max(12, int(cur_sz * 0.6)), bold=False)
         self._font_trans_ctx  = _make_font(max(10, int(ctx_sz * 0.8)), bold=False)
 
+        # 主题色彩方案
+        self._load_theme_colors()
+
         # 60FPS 连续渲染与缓动滚动驱动计时器
         self._anim_timer = QTimer(self)
         self._anim_timer.setInterval(16)  # ~60fps
@@ -76,7 +79,16 @@ class LyricsCanvas(QWidget):
 
         self.setMinimumHeight(400)
 
+    def _load_theme_colors(self):
+        self._color_act = QColor(settings.get_theme_color("lyric_active", "#FFFFFF"))
+        self._color_inact = QColor(settings.get_theme_color("lyric_inactive", "#A0A8B8"))
+        self._color_sec = QColor(settings.get_theme_color("lyric_secondary", "#C3E1FF"))
+        self._color_prog_start = QColor(settings.get_theme_color("progress_start", "#FFFFFF"))
+        self._color_prog_end = QColor(settings.get_theme_color("progress_end", "#A0E6FF"))
+        self._color_accent = QColor(settings.get_theme_color("accent", "#78CDFF"))
+
     def reload_settings(self):
+        self._load_theme_colors()
         self._show_translation = settings.get_show_translation()
         self._show_romaji = settings.get_show_romaji()
         self._parse_sections = settings.get_parse_sections()
@@ -296,6 +308,9 @@ class LyricsCanvas(QWidget):
             painter.setFont(fnt)
             fm = QFontMetrics(fnt)
             main_text = line.text.strip()
+            c_act = self._color_act
+            c_inact = self._color_inact
+            c_sec = self._color_sec
 
             if dist == 0:
                 if self._is_verbatim_song:
@@ -309,18 +324,20 @@ class LyricsCanvas(QWidget):
                             w_end = w_start + w_dur
 
                             if live_ms < w_start:
-                                painter.setPen(QColor(255, 255, 255, int(80 * fade_factor)))
+                                painter.setPen(QColor(c_inact.red(), c_inact.green(), c_inact.blue(), final_alpha))
                                 painter.drawText(int(curr_x), int(y + fm.ascent()), wd.text)
                             elif live_ms >= w_end:
-                                painter.setPen(QColor(255, 255, 255, final_alpha))
+                                painter.setPen(QColor(c_act.red(), c_act.green(), c_act.blue(), final_alpha))
                                 painter.drawText(int(curr_x), int(y + fm.ascent()), wd.text)
                             else:
                                 progress = min(1.0, max(0.0, (live_ms - w_start) / float(w_dur)))
                                 wipe = QLinearGradient(curr_x, 0, curr_x + ww, 0)
-                                wipe.setColorAt(0.0, QColor(255, 255, 255, final_alpha))
-                                wipe.setColorAt(progress, QColor(255, 255, 255, final_alpha))
-                                wipe.setColorAt(min(1.0, progress + 0.08), QColor(255, 255, 255, int(80 * fade_factor)))
-                                wipe.setColorAt(1.0, QColor(255, 255, 255, int(80 * fade_factor)))
+                                col_full = QColor(c_act.red(), c_act.green(), c_act.blue(), final_alpha)
+                                col_fade = QColor(c_inact.red(), c_inact.green(), c_inact.blue(), final_alpha)
+                                wipe.setColorAt(0.0, col_full)
+                                wipe.setColorAt(progress, col_full)
+                                wipe.setColorAt(min(1.0, progress + 0.08), col_fade)
+                                wipe.setColorAt(1.0, col_fade)
                                 painter.setPen(QPen(QBrush(wipe), 0))
                                 painter.drawText(int(curr_x), int(y + fm.ascent()), wd.text)
                             curr_x += ww
@@ -330,27 +347,23 @@ class LyricsCanvas(QWidget):
                         dur = max(1000, line.duration_ms)
                         progress = min(1.0, max(0.0, (live_ms - line.time_ms) / float(dur)))
                         wipe = QLinearGradient(curr_x, 0, curr_x + total_w, 0)
-                        wipe.setColorAt(0.0, QColor(255, 255, 255, final_alpha))
-                        wipe.setColorAt(progress, QColor(255, 255, 255, final_alpha))
-                        wipe.setColorAt(min(1.0, progress + 0.08), QColor(255, 255, 255, int(80 * fade_factor)))
-                        wipe.setColorAt(1.0, QColor(255, 255, 255, int(80 * fade_factor)))
+                        col_full = QColor(c_act.red(), c_act.green(), c_act.blue(), final_alpha)
+                        col_fade = QColor(c_inact.red(), c_inact.green(), c_inact.blue(), final_alpha)
+                        wipe.setColorAt(0.0, col_full)
+                        wipe.setColorAt(progress, col_full)
+                        wipe.setColorAt(min(1.0, progress + 0.08), col_fade)
+                        wipe.setColorAt(1.0, col_fade)
                         painter.setPen(QPen(QBrush(wipe), 0))
                         painter.drawText(int(curr_x), int(y + fm.ascent()), main_text)
                 else:
                     elided = fm.elidedText(main_text, Qt.TextElideMode.ElideRight, w - 80)
                     tx = (w - fm.horizontalAdvance(elided)) // 2
-                    painter.setPen(QColor(255, 255, 255, final_alpha))
+                    painter.setPen(QColor(c_act.red(), c_act.green(), c_act.blue(), final_alpha))
                     painter.drawText(tx, int(y + fm.ascent()), elided)
-
-                    bloom_alpha = int(32 * fade_factor)
-                    if bloom_alpha > 0:
-                        painter.setPen(QColor(255, 255, 255, bloom_alpha))
-                        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                            painter.drawText(tx + dx, int(y + fm.ascent()) + dy, elided)
             else:
                 elided = fm.elidedText(main_text, Qt.TextElideMode.ElideRight, w - 80)
                 tx = (w - fm.horizontalAdvance(elided)) // 2
-                painter.setPen(QColor(255, 255, 255, final_alpha))
+                painter.setPen(QColor(c_inact.red(), c_inact.green(), c_inact.blue(), final_alpha))
                 painter.drawText(tx, int(y + fm.ascent()), elided)
 
             # ── 副行绘制 ──
@@ -368,7 +381,7 @@ class LyricsCanvas(QWidget):
                 base_ro_alpha = 200 if dist == 0 else 85
                 ro_alpha = int(base_ro_alpha * (base_alpha / 255.0) * fade_factor)
                 if ro_alpha > 2:
-                    painter.setPen(QColor(160, 216, 239, ro_alpha))
+                    painter.setPen(QColor(c_sec.red(), c_sec.green(), c_sec.blue(), ro_alpha))
                     painter.drawText(ttx, int(sub_y + tfm.ascent()), te)
                 sub_y += tfm.height() + 6
 
@@ -380,7 +393,7 @@ class LyricsCanvas(QWidget):
                 base_t_alpha = 215 if dist == 0 else 95
                 t_alpha = int(base_t_alpha * (base_alpha / 255.0) * fade_factor)
                 if t_alpha > 2:
-                    painter.setPen(QColor(195, 225, 255, t_alpha))
+                    painter.setPen(QColor(c_sec.red(), c_sec.green(), c_sec.blue(), t_alpha))
                     painter.drawText(ttx, int(sub_y + tfm.ascent()), te)
                 sub_y += tfm.height() + 6
 
@@ -392,7 +405,7 @@ class LyricsCanvas(QWidget):
                     base_sec_alpha = 200 if dist == 0 else 90
                     sec_alpha = int(base_sec_alpha * (base_alpha / 255.0) * fade_factor)
                     if sec_alpha > 2:
-                        painter.setPen(QColor(195, 225, 255, sec_alpha))
+                        painter.setPen(QColor(c_sec.red(), c_sec.green(), c_sec.blue(), sec_alpha))
                         painter.drawText(ttx, int(sub_y + tfm.ascent()), te)
 
             y += lh

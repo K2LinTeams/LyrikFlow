@@ -34,3 +34,14 @@ fullscreen:
 smtc:
   watched_apps:             # 监听的音乐软件进程列表，留空为监听全部
     - cloudmusic.exe
+
+theme:
+  preset: "classic"         # 配色预设: classic / sakura / orange / custom
+  seed_color: "#0B57D0"
+  colors:
+    lyric_active: "#FFFFFF"
+    lyric_inactive: "#A0A8B8"
+    lyric_secondary: "#C3E1FF"
+    progress_start: "#FFFFFF"
+    progress_end: "#A0E6FF"
+    accent: "#78CDFF"

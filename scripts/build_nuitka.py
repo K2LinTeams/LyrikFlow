@@ -1,5 +1,5 @@
 """
-scripts/build_nuitka.py — Nuitka build and packaging
+scripts/build_nuitka.py — Nuitka Build
 """
 from __future__ import annotations
 
@@ -67,7 +67,6 @@ def ensure_icon() -> str:
 
 
 def run_nuitka(clean: bool = False) -> str:
-    """Execute Nuitka compilation."""
     dist_dir = os.path.join(PROJECT_ROOT, "dist")
     build_dir = os.path.join(PROJECT_ROOT, "build")
 
@@ -77,6 +76,7 @@ def run_nuitka(clean: bool = False) -> str:
             if os.path.exists(p):
                 shutil.rmtree(p, ignore_errors=True)
 
+    os.makedirs(dist_dir, exist_ok=True)
     icon_path = ensure_icon()
     main_script = os.path.join(PROJECT_ROOT, "main.py")
 
@@ -84,7 +84,7 @@ def run_nuitka(clean: bool = False) -> str:
         sys.executable,
         "-m",
         "nuitka",
-        "--standalone",
+        "--onefile",
         "--windows-console-mode=disable",
         "--enable-plugin=pyqt6",
         f"--output-dir={dist_dir}",
@@ -100,6 +100,16 @@ def run_nuitka(clean: bool = False) -> str:
         "--include-package=Crypto",
         "--include-package=yaml",
     ]
+
+    # Include config example file
+    cfg_example = os.path.join(PROJECT_ROOT, "config.example.yaml")
+    if os.path.exists(cfg_example):
+        cmd.append(f"--include-data-file={cfg_example}=config.example.yaml")
+
+    # Include fonts if present
+    fonts_dir = os.path.join(PROJECT_ROOT, "data", "fonts")
+    if os.path.isdir(fonts_dir) and any(os.scandir(fonts_dir)):
+        cmd.append(f"--include-data-dir={fonts_dir}=data/fonts")
 
     if icon_path and os.path.exists(icon_path):
         cmd.append(f"--windows-icon-from-ico={icon_path}")
@@ -118,99 +128,50 @@ def run_nuitka(clean: bool = False) -> str:
 
     subprocess.check_call(cmd, cwd=PROJECT_ROOT)
 
-    # Locate output folder
-    possible_dirs = [
-        os.path.join(dist_dir, "LyrikFlow.dist"),
-        os.path.join(dist_dir, "main.dist"),
-    ]
-    target_dist = None
-    for p in possible_dirs:
-        if os.path.isdir(p):
-            target_dist = p
-            break
+    exe_path = os.path.join(dist_dir, "LyrikFlow.exe")
+    if not os.path.exists(exe_path):
+        raise RuntimeError(f"Expected binary not found: {exe_path}")
 
-    if not target_dist:
-        raise RuntimeError(f"Nuitka output directory not found in {dist_dir}")
-
-    final_app_dir = os.path.join(dist_dir, "LyrikFlow")
-    if os.path.exists(final_app_dir) and os.path.abspath(final_app_dir) != os.path.abspath(target_dist):
-        shutil.rmtree(final_app_dir, ignore_errors=True)
-    if os.path.abspath(target_dist) != os.path.abspath(final_app_dir):
-        os.rename(target_dist, final_app_dir)
-
-    return final_app_dir
+    return exe_path
 
 
-def stage_extra_files(app_dir: str) -> None:
-    """Copy runtime configuration examples, readme, and fonts."""
-    print(f"[Build] Staging extra static resources to: {app_dir}")
-
-    # 1. config.example.yaml
-    src_cfg_example = os.path.join(PROJECT_ROOT, "config.example.yaml")
-    if os.path.exists(src_cfg_example):
-        shutil.copy2(src_cfg_example, os.path.join(app_dir, "config.example.yaml"))
-
-    # 2. README.md
-    src_readme = os.path.join(PROJECT_ROOT, "README.md")
-    if os.path.exists(src_readme):
-        shutil.copy2(src_readme, os.path.join(app_dir, "README.md"))
-
-    # 3. data/fonts directory
-    dest_data_fonts = os.path.join(app_dir, "data", "fonts")
-    os.makedirs(dest_data_fonts, exist_ok=True)
-
-    src_fonts_dirs = [
-        os.path.join(PROJECT_ROOT, "data", "fonts"),
-        os.path.join(PROJECT_ROOT, "fonts"),
-    ]
-    copied_fonts = 0
-    for sdir in src_fonts_dirs:
-        if os.path.isdir(sdir):
-            for fname in os.listdir(sdir):
-                if fname.lower().endswith((".ttf", ".otf", ".ttc")):
-                    src_f = os.path.join(sdir, fname)
-                    dest_f = os.path.join(dest_data_fonts, fname)
-                    if not os.path.exists(dest_f):
-                        shutil.copy2(src_f, dest_f)
-                        copied_fonts += 1
-
-    print(f"[Build] Staging completed ({copied_fonts} font files included).")
-
-
-def zip_directory(src_dir: str, zip_path: str) -> None:
-    """Compress directory into zip archive."""
-    print(f"[Build] Creating ZIP archive: {zip_path} ...")
+def create_zip(exe_path: str, zip_path: str) -> None:
+    """Create zip package containing the standalone executable and config example."""
+    print(f"[Build] Creating ZIP package: {zip_path} ...")
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-        for root, dirs, files in os.walk(src_dir):
-            for file in files:
-                full_path = os.path.join(root, file)
-                rel_path = os.path.relpath(full_path, os.path.dirname(src_dir))
-                zf.write(full_path, rel_path)
+        zf.write(exe_path, "LyrikFlow.exe")
+        cfg_example = os.path.join(PROJECT_ROOT, "config.example.yaml")
+        if os.path.exists(cfg_example):
+            zf.write(cfg_example, "config.example.yaml")
+        readme = os.path.join(PROJECT_ROOT, "README.md")
+        if os.path.exists(readme):
+            zf.write(readme, "README.md")
+
     size_mb = os.path.getsize(zip_path) / (1024 * 1024)
     print(f"[Build] ZIP created successfully! Size: {size_mb:.2f} MB")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="LyrikFlow Nuitka Build Tool")
+    parser = argparse.ArgumentParser(description="LyrikFlow Nuitka Onefile Build Tool")
     parser.add_argument("--clean", action="store_true", help="Clean previous build artifacts before compilation")
     parser.add_argument("--zip", action="store_true", default=True, help="Create ZIP package after compilation (default: True)")
     parser.add_argument("--no-zip", dest="zip", action="store_false", help="Do not create ZIP package")
     args = parser.parse_args()
 
     try:
-        app_dir = run_nuitka(clean=args.clean)
-        stage_extra_files(app_dir)
+        exe_path = run_nuitka(clean=args.clean)
+        exe_size_mb = os.path.getsize(exe_path) / (1024 * 1024)
 
         zip_dest = ""
         if args.zip:
             zip_dest = os.path.join(PROJECT_ROOT, "dist", "LyrikFlow-Windows-x64.zip")
-            zip_directory(app_dir, zip_dest)
+            create_zip(exe_path, zip_dest)
 
         print("\n" + "=" * 60)
-        print("LyrikFlow Nuitka build and packaging succeeded!")
-        print(f"Application directory: {app_dir}")
+        print("LyrikFlow Nuitka Single-File Build Succeeded!")
+        print(f"Portable Executable: {exe_path} ({exe_size_mb:.2f} MB)")
         if args.zip and zip_dest:
-            print(f"ZIP package: {zip_dest}")
+            print(f"ZIP Package: {zip_dest}")
         print("=" * 60 + "\n")
 
     except subprocess.CalledProcessError as e:
