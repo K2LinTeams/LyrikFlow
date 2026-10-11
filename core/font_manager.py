@@ -47,10 +47,9 @@ _FILE_TO_FAMILIES: dict[str, list[str]] = {}
 
 def get_candidate_font_dirs() -> list[str]:
     base = getattr(settings, "BASE_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    internal_base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     candidates = [
         os.path.join(base, "data", "fonts"),
-        os.path.join(internal_base, "data", "fonts"),
+        os.path.join(base, "fonts"),
         os.path.join(os.getcwd(), "data", "fonts"),
     ]
     seen = set()

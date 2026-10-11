@@ -99,17 +99,21 @@ def run_nuitka(clean: bool = False) -> str:
         "--include-package=gui",
         "--include-package=Crypto",
         "--include-package=yaml",
+        "--nofollow-import-to=PyQt6.QtPdf",
+        "--nofollow-import-to=PyQt6.QtNetwork",
+        "--nofollow-import-to=PyQt6.QtSvg",
+        "--nofollow-import-to=PyQt6.QtQml",
+        "--nofollow-import-to=PyQt6.QtQuick",
+        "--nofollow-import-to=PyQt6.QtSql",
+        "--nofollow-import-to=PyQt6.QtPrintSupport",
+        "--nofollow-import-to=Crypto.SelfTest",
+        "--noinclude-qt-translations",
     ]
 
     # Include config example file
     cfg_example = os.path.join(PROJECT_ROOT, "config.example.yaml")
     if os.path.exists(cfg_example):
         cmd.append(f"--include-data-file={cfg_example}=data/config.example.yaml")
-
-    # Include fonts if present
-    fonts_dir = os.path.join(PROJECT_ROOT, "data", "fonts")
-    if os.path.isdir(fonts_dir) and any(os.scandir(fonts_dir)):
-        cmd.append(f"--include-data-dir={fonts_dir}=data/fonts")
 
     if icon_path and os.path.exists(icon_path):
         cmd.append(f"--windows-icon-from-ico={icon_path}")

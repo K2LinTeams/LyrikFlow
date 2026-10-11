@@ -69,11 +69,20 @@ class OverlayWidget(QWidget):
         self._scroll_x: float = 0.0
         self._target_scroll_x: float = 0.0
 
-        # 字体
+        # 字体与度量缓存
         self._font_size = settings.get_font_size_current()
         self._font_main = self._create_round_font(self._font_size, bold=True)
         self._font_sub = self._create_round_font(settings.get_font_size_context(), bold=False)
+        self._fm_main = QFontMetrics(self._font_main)
+        self._fm_sub = QFontMetrics(self._font_sub)
+        self._cached_main_w: dict[str, int] = {}
+        self._cached_sub_w: dict[str, int] = {}
         self._is_verbatim_song: bool = False
+
+        # 封面预渲染与预缩放缓存
+        self._cached_thumb_scaled: Optional[QPixmap] = None
+        self._cached_prev_thumb_scaled: Optional[QPixmap] = None
+        self._cached_glow_pix: Optional[QPixmap] = None
 
         # 主题色彩方案
         self._load_theme_colors()
@@ -110,6 +119,37 @@ class OverlayWidget(QWidget):
             y = screen.y() + int(screen.height() * 0.74)
             self.setGeometry(x, y, win_w, win_h)
 
+    def _rebuild_cover_cache(self, cover_size: int = 62) -> None:
+        """预生成双倍分辨率的高清展示图与环境光晕 Pixmap，彻底消除每帧 paintEvent 内反复 scaled()"""
+        glow_size = cover_size + 12
+        if self._thumb_pixmap and not self._thumb_pixmap.isNull():
+            self._cached_thumb_scaled = self._thumb_pixmap.scaled(
+                int(cover_size * 2), int(cover_size * 2),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self._cached_glow_pix = self._thumb_pixmap.scaled(
+                16, 16,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ).scaled(
+                glow_size, glow_size,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        else:
+            self._cached_thumb_scaled = None
+            self._cached_glow_pix = None
+
+        if self._prev_thumb_pixmap and not self._prev_thumb_pixmap.isNull():
+            self._cached_prev_thumb_scaled = self._prev_thumb_pixmap.scaled(
+                int(cover_size * 2), int(cover_size * 2),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        else:
+            self._cached_prev_thumb_scaled = None
+
     # ── 公共接口 ─────────────────────────────────────────────────────────────
     def set_song(self, title: str, artist: str, thumb_bytes: bytes) -> None:
         """设置当前歌曲信息与封面缩略图"""
@@ -131,6 +171,7 @@ class OverlayWidget(QWidget):
             self._thumb_pixmap = None
             self._cover_alpha = 0.0
             self._target_cover_alpha = 0.0
+        self._rebuild_cover_cache()
         self.update()
 
     def update_hd_cover(self, hd_cover_bytes: bytes) -> None:
@@ -155,6 +196,7 @@ class OverlayWidget(QWidget):
             self._cover_alpha = 0.0
             self._target_cover_alpha = 1.0
         self._target_loading_progress = 1.0
+        self._rebuild_cover_cache()
         self.update()
 
     def update_display_title(self, title: str) -> None:
@@ -241,14 +283,18 @@ class OverlayWidget(QWidget):
 
     # ── 60FPS 刷新 tick ──────────────────────────────────────────────────────
     def _on_render_tick(self) -> None:
+        is_animating = False
+
         # 换行微浮动动画
         if self._anim_progress < 1.0:
             self._anim_progress = min(1.0, self._anim_progress + 0.065)
+            is_animating = True
 
         # 超长歌词水平滚动插值
         diff = self._target_scroll_x - self._scroll_x
         if abs(diff) > 0.05:
             self._scroll_x += diff * 0.12
+            is_animating = True
         else:
             self._scroll_x = self._target_scroll_x
 
@@ -256,6 +302,7 @@ class OverlayWidget(QWidget):
         diff_p = self._target_loading_progress - self._loading_progress
         if abs(diff_p) > 0.001:
             self._loading_progress += diff_p * 0.075
+            is_animating = True
         else:
             self._loading_progress = self._target_loading_progress
 
@@ -263,6 +310,7 @@ class OverlayWidget(QWidget):
         diff_a = self._target_cover_alpha - self._cover_alpha
         if abs(diff_a) > 0.005:
             self._cover_alpha += diff_a * 0.16
+            is_animating = True
         else:
             self._cover_alpha = self._target_cover_alpha
 
@@ -271,13 +319,18 @@ class OverlayWidget(QWidget):
             diff_cf = 1.0 - self._thumb_crossfade
             if diff_cf > 0.01:
                 self._thumb_crossfade += diff_cf * 0.16
+                is_animating = True
             else:
                 self._thumb_crossfade = 1.0
                 self._prev_thumb_pixmap = None
 
-        self._loading_spinner_angle = (self._loading_spinner_angle + 2.5) % 360.0
+        spinner_needed = self._loading_progress > 0.02 and (self._loading_progress < 0.999 or self._cover_alpha < 0.98)
+        if spinner_needed:
+            self._loading_spinner_angle = (self._loading_spinner_angle + 2.5) % 360.0
+            is_animating = True
 
-        self.update()
+        if self._is_playing or is_animating or self._is_dragging or self._is_resizing:
+            self.update()
 
     # ── 绘制主入口 ───────────────────────────────────────────────────────────
     def paintEvent(self, event):
@@ -319,14 +372,23 @@ class OverlayWidget(QWidget):
         title = self._song_title or "正在播放"
         artist = self._song_artist or ""
 
-        fm_m = QFontMetrics(self._font_main)
-        fm_s = QFontMetrics(self._font_sub)
+        fm_m = self._fm_main
+        fm_s = self._fm_sub
 
         cover_size = 62.0
         spacing = 18.0
 
-        title_w = fm_m.horizontalAdvance(title)
-        artist_w = fm_s.horizontalAdvance(artist) if artist else 0
+        title_w = self._cached_main_w.get(title)
+        if title_w is None:
+            title_w = fm_m.horizontalAdvance(title)
+            self._cached_main_w[title] = title_w
+
+        artist_w = 0
+        if artist:
+            artist_w = self._cached_sub_w.get(artist)
+            if artist_w is None:
+                artist_w = fm_s.horizontalAdvance(artist)
+                self._cached_sub_w[artist] = artist_w
         text_block_w = max(title_w, artist_w)
 
         total_w = cover_size + spacing + text_block_w
@@ -373,58 +435,36 @@ class OverlayWidget(QWidget):
             painter.save()
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
-            # ── A. 底层环境光晕 ──
+            # ── A. 底层环境光晕（使用预缓存的光晕图）──
             glow_rect = cover_rect.adjusted(-6, -6, 6, 6)
-            glow_pix = self._thumb_pixmap.scaled(
-                16, 16,
-                Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            ).scaled(
-                int(glow_rect.width()), int(glow_rect.height()),
-                Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
             glow_path = QPainterPath()
             glow_path.addRoundedRect(glow_rect, 18.0, 18.0)
             painter.save()
             painter.setClipPath(glow_path)
             painter.setOpacity(self._opacity * 0.28 * self._cover_alpha)
-            painter.drawPixmap(int(glow_rect.x()), int(glow_rect.y()), glow_pix)
+            if self._cached_glow_pix:
+                painter.drawPixmap(int(glow_rect.x()), int(glow_rect.y()), self._cached_glow_pix)
             painter.restore()
 
-            # ── B. 主封面 ──
+            # ── B. 主封面（使用预缓存的缩放图）──
             path = QPainterPath()
             path.addRoundedRect(cover_rect, 14.0, 14.0)
             painter.save()
             painter.setClipPath(path)
             target_rect = QRectF(cover_rect.x(), cover_rect.y(), cover_size, cover_size).toRect()
 
-            if self._prev_thumb_pixmap and not self._prev_thumb_pixmap.isNull() and self._thumb_crossfade < 1.0:
+            if self._cached_prev_thumb_scaled and self._thumb_crossfade < 1.0:
                 # 绘制旧封面作为底层基准
                 painter.setOpacity(self._opacity * self._cover_alpha)
-                scaled_prev = self._prev_thumb_pixmap.scaled(
-                    int(cover_size * 2), int(cover_size * 2),
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                painter.drawPixmap(target_rect, scaled_prev)
+                painter.drawPixmap(target_rect, self._cached_prev_thumb_scaled)
 
                 # 叠加新高清封面淡入
                 painter.setOpacity(self._opacity * self._cover_alpha * self._thumb_crossfade)
-                scaled_curr = self._thumb_pixmap.scaled(
-                    int(cover_size * 2), int(cover_size * 2),
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                painter.drawPixmap(target_rect, scaled_curr)
-            else:
+                if self._cached_thumb_scaled:
+                    painter.drawPixmap(target_rect, self._cached_thumb_scaled)
+            elif self._cached_thumb_scaled:
                 painter.setOpacity(self._opacity * self._cover_alpha)
-                scaled_thumb = self._thumb_pixmap.scaled(
-                    int(cover_size * 2), int(cover_size * 2),
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                painter.drawPixmap(target_rect, scaled_thumb)
+                painter.drawPixmap(target_rect, self._cached_thumb_scaled)
 
             painter.restore()
 
@@ -464,8 +504,8 @@ class OverlayWidget(QWidget):
         if not curr_text:
             return
 
-        fm_m = QFontMetrics(self._font_main)
-        fm_s = QFontMetrics(self._font_sub)
+        fm_m = self._fm_main
+        fm_s = self._fm_sub
 
         # 检查是否溢出需要边缘遮罩虚化
         main_w = fm_m.horizontalAdvance(curr_text)
@@ -934,6 +974,10 @@ class OverlayWidget(QWidget):
         self._font_size = settings.get_font_size_current()
         self._font_main = self._create_round_font(self._font_size, bold=True)
         self._font_sub = self._create_round_font(settings.get_font_size_context(), bold=False)
+        self._fm_main = QFontMetrics(self._font_main)
+        self._fm_sub = QFontMetrics(self._font_sub)
+        self._cached_main_w.clear()
+        self._cached_sub_w.clear()
         self._show_translation = settings.get_show_translation()
         self._show_romaji = settings.get_show_romaji()
         self._secondary_mode = settings.get_secondary_mode()

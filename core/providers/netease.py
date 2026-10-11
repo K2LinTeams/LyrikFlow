@@ -11,7 +11,7 @@ import requests
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 
-from .base import BaseLyricProvider, RawLyricResult, SearchSongItem
+from .base import BaseLyricProvider, RawLyricResult, SearchSongItem, get_shared_session
 
 EAPI_KEY = b"e82ckenh8dichen8"
 TIMEOUT = 6
@@ -61,7 +61,7 @@ class NeteaseLyricProvider(BaseLyricProvider):
 
         try:
             params = {"params": eapi_encrypt(url_path, payload)}
-            resp = requests.post(api_url, data=params, headers=NETEASE_HEADERS, timeout=TIMEOUT)
+            resp = get_shared_session().post(api_url, data=params, headers=NETEASE_HEADERS, timeout=TIMEOUT)
             if resp.status_code == 200:
                 songs = resp.json().get("result", {}).get("songs", [])
                 if songs:
@@ -154,7 +154,7 @@ class NeteaseLyricProvider(BaseLyricProvider):
         results: list[SearchSongItem] = []
         try:
             params = {"params": eapi_encrypt(url_path, payload)}
-            resp = requests.post(api_url, data=params, headers=NETEASE_HEADERS, timeout=TIMEOUT)
+            resp = get_shared_session().post(api_url, data=params, headers=NETEASE_HEADERS, timeout=TIMEOUT)
             if resp.status_code == 200:
                 songs = resp.json().get("result", {}).get("songs", [])
                 for s in songs:
@@ -173,7 +173,7 @@ class NeteaseLyricProvider(BaseLyricProvider):
     def _get_song_by_id(self, song_id: str) -> Optional[SearchSongItem]:
         try:
             url = f"https://music.163.com/api/song/detail?ids=[{song_id}]"
-            resp = requests.get(url, headers=NETEASE_HEADERS, timeout=TIMEOUT)
+            resp = get_shared_session().get(url, headers=NETEASE_HEADERS, timeout=TIMEOUT)
             if resp.status_code == 200:
                 songs = resp.json().get("songs", [])
                 if songs and str(songs[0].get("id")) == song_id:
@@ -211,7 +211,7 @@ class NeteaseLyricProvider(BaseLyricProvider):
         try:
             url = "https://music.163.com/api/search/get"
             payload = {"s": keyword, "type": 1, "limit": 5, "offset": 0}
-            resp = requests.post(url, data=payload, headers=NETEASE_HEADERS, timeout=TIMEOUT)
+            resp = get_shared_session().post(url, data=payload, headers=NETEASE_HEADERS, timeout=TIMEOUT)
             if resp.status_code == 200:
                 songs = resp.json().get("result", {}).get("songs", [])
                 if songs:
@@ -238,7 +238,7 @@ class NeteaseLyricProvider(BaseLyricProvider):
                 "yrv": "0",
             }
             params = {"params": eapi_encrypt(url_path, payload)}
-            resp = requests.post(api_url, data=params, headers=NETEASE_HEADERS, timeout=TIMEOUT)
+            resp = get_shared_session().post(api_url, data=params, headers=NETEASE_HEADERS, timeout=TIMEOUT)
             if resp.status_code == 200:
                 rj = resp.json()
                 is_pure_music = bool(rj.get("nolyric") or rj.get("pureMusic"))
@@ -268,7 +268,7 @@ class NeteaseLyricProvider(BaseLyricProvider):
         try:
             url = "https://music.163.com/api/song/lyric"
             params = {"id": song_id, "lv": -1, "tv": -1, "rv": -1}
-            resp = requests.get(url, params=params, headers=NETEASE_HEADERS, timeout=TIMEOUT)
+            resp = get_shared_session().get(url, params=params, headers=NETEASE_HEADERS, timeout=TIMEOUT)
             if resp.status_code == 200:
                 rj = resp.json()
                 lrc = (rj.get("lrc", {}).get("lyric") or "").strip()
@@ -297,7 +297,7 @@ class NeteaseLyricProvider(BaseLyricProvider):
             return None
         try:
             hd_url = f"{pic_url}?param=500y500" if "?" not in pic_url else pic_url
-            resp = requests.get(hd_url, headers=NETEASE_HEADERS, timeout=TIMEOUT)
+            resp = get_shared_session().get(hd_url, headers=NETEASE_HEADERS, timeout=TIMEOUT)
             if resp.status_code == 200 and len(resp.content) > 1000:
                 return resp.content
         except Exception:

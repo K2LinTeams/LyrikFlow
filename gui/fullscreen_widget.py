@@ -68,6 +68,13 @@ class LyricsCanvas(QWidget):
         self._font_trans_cur  = _make_font(max(12, int(cur_sz * 0.6)), bold=False)
         self._font_trans_ctx  = _make_font(max(10, int(ctx_sz * 0.8)), bold=False)
 
+        # 缓存字体度量，避免每帧重复构造 QFontMetrics
+        self._fm_cur = QFontMetrics(self._font_cur)
+        self._fm_near = QFontMetrics(self._font_near)
+        self._fm_far = QFontMetrics(self._font_far)
+        self._fm_trans_cur = QFontMetrics(self._font_trans_cur)
+        self._fm_trans_ctx = QFontMetrics(self._font_trans_ctx)
+
         # 主题色彩方案
         self._load_theme_colors()
 
@@ -100,6 +107,11 @@ class LyricsCanvas(QWidget):
         self._font_far        = _make_font(max(10, ctx_sz - 4), bold=False)
         self._font_trans_cur  = _make_font(max(12, int(cur_sz * 0.6)), bold=False)
         self._font_trans_ctx  = _make_font(max(10, int(ctx_sz * 0.8)), bold=False)
+        self._fm_cur = QFontMetrics(self._font_cur)
+        self._fm_near = QFontMetrics(self._font_near)
+        self._fm_far = QFontMetrics(self._font_far)
+        self._fm_trans_cur = QFontMetrics(self._font_trans_cur)
+        self._fm_trans_ctx = QFontMetrics(self._font_trans_ctx)
         if self._cur_index >= 0:
             self._target_offset = self._calc_offset_for(self._cur_index)
         self.update()
@@ -112,11 +124,14 @@ class LyricsCanvas(QWidget):
 
     def _on_anim_tick(self):
         diff = self._target_offset - self._scroll_offset
-        if abs(diff) > 0.2:
+        is_moving = abs(diff) > 0.2
+        if is_moving:
             self._scroll_offset += diff * 0.12   # 平滑缓动插值
         else:
             self._scroll_offset = self._target_offset
-        self.update()
+
+        if self._is_playing or is_moving:
+            self.update()
 
     def set_lyrics(self, lyrics: Optional[ParsedLyrics]):
         self._lyrics = lyrics
@@ -188,11 +203,8 @@ class LyricsCanvas(QWidget):
             fnt, has_t = self._line_meta(i, target_idx)
             lh = self._line_height(i, target_idx, has_t)
             if i == target_idx:
-                fm = QFontMetrics(fnt)
-                text_h = float(fm.height())
-                tfnt = self._font_trans_cur
-                tfm = QFontMetrics(tfnt)
-                sub_h = float(tfm.height() + 6)
+                text_h = float(self._fm_cur.height())
+                sub_h = float(self._fm_trans_cur.height() + 6)
                 if self._show_romaji and line.romaji.strip():
                     text_h += sub_h
                 if self._show_translation and line.translation.strip():
@@ -224,14 +236,18 @@ class LyricsCanvas(QWidget):
         return fnt, has_t
 
     def _line_height(self, i: int, cur: int, has_t: bool) -> float:
-        fnt, _ = self._line_meta(i, cur)
-        fm = QFontMetrics(fnt)
-        base = float(fm.height())
-        line = self._lyrics.lines[i]
-        tfnt = self._font_trans_cur if i == cur else self._font_trans_ctx
-        tfm = QFontMetrics(tfnt)
-        sub_h = float(tfm.height() + 6)
+        dist = abs(i - cur)
+        if dist == 0:
+            base = float(self._fm_cur.height())
+            sub_h = float(self._fm_trans_cur.height() + 6)
+        elif dist == 1:
+            base = float(self._fm_near.height())
+            sub_h = float(self._fm_trans_ctx.height() + 6)
+        else:
+            base = float(self._fm_far.height())
+            sub_h = float(self._fm_trans_ctx.height() + 6)
 
+        line = self._lyrics.lines[i]
         has_ro = bool(self._show_romaji and line.romaji.strip())
         has_tr = bool(self._show_translation and line.translation.strip())
 
@@ -650,21 +666,26 @@ class FullscreenWidget(QWidget):
         self._canvas.set_current_index(idx)
 
     def _on_fs_tick(self) -> None:
+        is_animating = False
+
         diff_p = self._target_loading_progress - self._loading_progress
         if abs(diff_p) > 0.001:
             self._loading_progress += diff_p * 0.075
+            is_animating = True
         else:
             self._loading_progress = self._target_loading_progress
 
         diff_a = self._target_cover_alpha - self._cover_alpha
         if abs(diff_a) > 0.005:
             self._cover_alpha += diff_a * 0.16
+            is_animating = True
         else:
             self._cover_alpha = self._target_cover_alpha
 
         diff_bg = 1.0 - self._bg_crossfade
         if diff_bg > 0.01:
             self._bg_crossfade += diff_bg * 0.12
+            is_animating = True
         else:
             self._bg_crossfade = 1.0
 
@@ -673,12 +694,18 @@ class FullscreenWidget(QWidget):
             diff_cf = 1.0 - self._thumb_crossfade
             if diff_cf > 0.01:
                 self._thumb_crossfade += diff_cf * 0.16
+                is_animating = True
             else:
                 self._thumb_crossfade = 1.0
                 self._prev_thumb_pixmap = None
 
-        self._loading_spinner_angle = (self._loading_spinner_angle + 2.5) % 360.0
-        self.update()
+        spinner_needed = self._loading_progress > 0.02 and (self._loading_progress < 0.999 or self._cover_alpha < 0.98)
+        if spinner_needed:
+            self._loading_spinner_angle = (self._loading_spinner_angle + 2.5) % 360.0
+            is_animating = True
+
+        if is_animating:
+            self.update()
 
     def reset_loading_progress(self, keep_cover: bool = False) -> None:
         """重置加载进度，开启圆环动画"""

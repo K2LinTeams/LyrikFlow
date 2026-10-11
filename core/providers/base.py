@@ -5,6 +5,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+_SHARED_SESSION: Optional[requests.Session] = None
+
+
+def get_shared_session() -> requests.Session:
+    global _SHARED_SESSION
+    if _SHARED_SESSION is None:
+        s = requests.Session()
+        adapter = HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=20,
+            max_retries=Retry(total=2, backoff_factor=0.2, status_forcelist=[502, 503, 504]),
+        )
+        s.mount("http://", adapter)
+        s.mount("https://", adapter)
+        _SHARED_SESSION = s
+    return _SHARED_SESSION
 
 
 @dataclass

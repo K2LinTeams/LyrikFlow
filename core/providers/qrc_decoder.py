@@ -9,33 +9,60 @@ import xml.etree.ElementTree as ET
 import zlib
 from typing import Optional
 
-from .qrc_tables import (
-    E12_TABLES,
-    INV_S0,
-    INV_S1,
-    IP0_TABLES,
-    IP1_TABLES,
-    QQ_PASS_DATA,
-    SP01,
-    SP23,
-    SP45,
-    SP67,
-)
-
 QQ_KEY = b"!@#)(*$%123ZXC!@!@#)(NHL"
 
-_IP0_0, _IP0_1, _IP0_2, _IP0_3, _IP0_4, _IP0_5, _IP0_6, _IP0_7 = IP0_TABLES
-_IP1_0, _IP1_1, _IP1_2, _IP1_3, _IP1_4, _IP1_5, _IP1_6, _IP1_7 = IP1_TABLES
-_INV0_0, _INV0_1, _INV0_2, _INV0_3 = INV_S0
-_INV1_0, _INV1_1, _INV1_2, _INV1_3 = INV_S1
-_E12_0, _E12_1, _E12_2, _E12_3 = E12_TABLES
-_SP01, _SP23, _SP45, _SP67 = SP01, SP23, SP45, SP67
-_P0_15, _P0_LAST = QQ_PASS_DATA[0]
-_P1_15, _P1_LAST = QQ_PASS_DATA[1]
-_P2_15, _P2_LAST = QQ_PASS_DATA[2]
+_TABLES_LOADED = False
+_IP0_0 = _IP0_1 = _IP0_2 = _IP0_3 = _IP0_4 = _IP0_5 = _IP0_6 = _IP0_7 = None
+_IP1_0 = _IP1_1 = _IP1_2 = _IP1_3 = _IP1_4 = _IP1_5 = _IP1_6 = _IP1_7 = None
+_INV0_0 = _INV0_1 = _INV0_2 = _INV0_3 = None
+_INV1_0 = _INV1_1 = _INV1_2 = _INV1_3 = None
+_E12_0 = _E12_1 = _E12_2 = _E12_3 = None
+_SP01 = _SP23 = _SP45 = _SP67 = None
+_P0_15 = _P0_LAST = None
+_P1_15 = _P1_LAST = None
+_P2_15 = _P2_LAST = None
+
+
+def _ensure_tables_loaded() -> None:
+    global _TABLES_LOADED
+    global _IP0_0, _IP0_1, _IP0_2, _IP0_3, _IP0_4, _IP0_5, _IP0_6, _IP0_7
+    global _IP1_0, _IP1_1, _IP1_2, _IP1_3, _IP1_4, _IP1_5, _IP1_6, _IP1_7
+    global _INV0_0, _INV0_1, _INV0_2, _INV0_3
+    global _INV1_0, _INV1_1, _INV1_2, _INV1_3
+    global _E12_0, _E12_1, _E12_2, _E12_3
+    global _SP01, _SP23, _SP45, _SP67
+    global _P0_15, _P0_LAST, _P1_15, _P1_LAST, _P2_15, _P2_LAST
+
+    if _TABLES_LOADED:
+        return
+
+    from .qrc_tables import (
+        E12_TABLES,
+        INV_S0,
+        INV_S1,
+        IP0_TABLES,
+        IP1_TABLES,
+        QQ_PASS_DATA,
+        SP01,
+        SP23,
+        SP45,
+        SP67,
+    )
+
+    _IP0_0, _IP0_1, _IP0_2, _IP0_3, _IP0_4, _IP0_5, _IP0_6, _IP0_7 = IP0_TABLES
+    _IP1_0, _IP1_1, _IP1_2, _IP1_3, _IP1_4, _IP1_5, _IP1_6, _IP1_7 = IP1_TABLES
+    _INV0_0, _INV0_1, _INV0_2, _INV0_3 = INV_S0
+    _INV1_0, _INV1_1, _INV1_2, _INV1_3 = INV_S1
+    _E12_0, _E12_1, _E12_2, _E12_3 = E12_TABLES
+    _SP01, _SP23, _SP45, _SP67 = SP01, SP23, SP45, SP67
+    _P0_15, _P0_LAST = QQ_PASS_DATA[0]
+    _P1_15, _P1_LAST = QQ_PASS_DATA[1]
+    _P2_15, _P2_LAST = QQ_PASS_DATA[2]
+    _TABLES_LOADED = True
 
 
 def _fast_qrc_decrypt(cipher_bytes: bytes) -> bytes:
+    _ensure_tables_loaded()
     n = len(cipher_bytes)
     out = bytearray(n)
     for i in range(0, n, 8):

@@ -3,7 +3,10 @@ core/lyrics_fetcher.py — 多源歌词获取
 """
 from __future__ import annotations
 
+import difflib
+import re
 import threading
+import unicodedata
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
@@ -128,7 +131,6 @@ def fetch_lyrics_multi(
     def _is_matching_title(cand_title: str, query_title: str) -> bool:
         if not cand_title or not query_title:
             return True
-        import difflib, unicodedata, re
         def _clean(s: str) -> str:
             s = unicodedata.normalize('NFKC', s).lower().strip()
             s = re.sub(r"\(.*?\)|\[.*?\]|（.*?）|【.*?】", "", s)

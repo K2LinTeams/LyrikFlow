@@ -7,7 +7,7 @@ from typing import Optional
 
 import requests
 
-from .base import BaseLyricProvider, RawLyricResult, SearchSongItem
+from .base import BaseLyricProvider, RawLyricResult, SearchSongItem, get_shared_session
 
 TIMEOUT = 5
 
@@ -23,7 +23,7 @@ class LrclibLyricProvider(BaseLyricProvider):
         url = "https://lrclib.net/api/search"
         params = {"q": f"{title} {artist}".strip()}
         try:
-            resp = requests.get(url, params=params, headers=LRCLIB_HEADERS, timeout=TIMEOUT)
+            resp = get_shared_session().get(url, params=params, headers=LRCLIB_HEADERS, timeout=TIMEOUT)
             if resp.status_code == 200:
                 items = resp.json()
                 if isinstance(items, list) and items:
@@ -45,7 +45,7 @@ class LrclibLyricProvider(BaseLyricProvider):
         params = {"q": f"{title} {artist}".strip()}
         results: list[SearchSongItem] = []
         try:
-            resp = requests.get(url, params=params, headers=LRCLIB_HEADERS, timeout=TIMEOUT)
+            resp = get_shared_session().get(url, params=params, headers=LRCLIB_HEADERS, timeout=TIMEOUT)
             if resp.status_code == 200:
                 items = resp.json()
                 if isinstance(items, list):
@@ -65,7 +65,7 @@ class LrclibLyricProvider(BaseLyricProvider):
     def get_lyrics(self, song_item: SearchSongItem) -> Optional[RawLyricResult]:
         url = f"https://lrclib.net/api/get/{song_item.song_id}"
         try:
-            resp = requests.get(url, headers=LRCLIB_HEADERS, timeout=TIMEOUT)
+            resp = get_shared_session().get(url, headers=LRCLIB_HEADERS, timeout=TIMEOUT)
             if resp.status_code == 200:
                 data = resp.json()
                 lrc = data.get("syncedLyrics") or data.get("plainLyrics") or ""

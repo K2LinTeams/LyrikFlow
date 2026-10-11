@@ -10,7 +10,7 @@ from typing import Optional
 
 import requests
 
-from .base import BaseLyricProvider, RawLyricResult, SearchSongItem
+from .base import BaseLyricProvider, RawLyricResult, SearchSongItem, get_shared_session
 from .qrc_decoder import extract_qrc_payload
 
 TIMEOUT = 6
@@ -118,7 +118,7 @@ class QQMusicLyricProvider(BaseLyricProvider):
                 },
             }
             try:
-                resp = requests.post(
+                resp = get_shared_session().post(
                     "https://u.y.qq.com/cgi-bin/musicu.fcg",
                     json=search_body,
                     headers=QQ_HEADERS,
@@ -432,7 +432,7 @@ class QQMusicLyricProvider(BaseLyricProvider):
                     "lrctype": "4",
                     "musicid": numeric_id,
                 }
-                resp = requests.post(
+                resp = get_shared_session().post(
                     "https://c.y.qq.com/qqmusic/fcgi-bin/lyric_download.fcg",
                     data=download_data,
                     headers=QQ_HEADERS,
@@ -465,7 +465,7 @@ class QQMusicLyricProvider(BaseLyricProvider):
                     "outCharset": "utf8",
                     "nobase64": 0,
                 }
-                resp = requests.get(
+                resp = get_shared_session().get(
                     "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg",
                     params=params,
                     headers=QQ_HEADERS,
@@ -513,7 +513,7 @@ class QQMusicLyricProvider(BaseLyricProvider):
         if not pic_url:
             return None
         try:
-            resp = requests.get(pic_url, headers=QQ_HEADERS, timeout=TIMEOUT)
+            resp = get_shared_session().get(pic_url, headers=QQ_HEADERS, timeout=TIMEOUT)
             if resp.status_code == 200 and len(resp.content) > 1000:
                 return resp.content
         except Exception:
