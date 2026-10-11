@@ -60,6 +60,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "context_lines": 5,
         "font_size_current": 38,
         "font_size_context": 18,
+        "context_secondary_mode": "both",
     },
     "smtc": {
         "watched_apps": ["cloudmusic.exe"],
@@ -189,6 +190,10 @@ def get_fullscreen_font_size_context() -> int:
     """全屏模式下上下文歌词字号（默认 18）"""
     return int(_get(["fullscreen", "font_size_context"], 18))
 
+def get_fullscreen_context_secondary_mode() -> str:
+    """全屏非当前行副行显示内容"""
+    return str(_get(["fullscreen", "context_secondary_mode"], "both"))
+
 def get_show_translation() -> bool:
     return bool(_get(["lyrics", "show_translation"], True))
 
@@ -196,7 +201,7 @@ def get_show_romaji() -> bool:
     return bool(_get(["lyrics", "show_romaji"], False))
 
 def get_secondary_mode() -> str:
-    """副行显示偏好：'prefer_trans' (优先译文), 'prefer_romaji' (优先罗马音), 'both' (并排显示)"""
+    """副行显示偏好"""
     return str(_get(["lyrics", "secondary_mode"], "prefer_trans"))
 
 def get_show_line_progress() -> bool:
@@ -204,7 +209,7 @@ def get_show_line_progress() -> bool:
     return bool(_get(["lyrics", "show_line_progress"], True))
 
 def get_parse_sections() -> bool:
-    """是否开启段落解析（隐藏章节与角色标记行，将角色名提取至翻译行）"""
+    """是否开启段落解析"""
     return bool(_get(["lyrics", "parse_sections"], True))
 
 def get_watched_apps() -> list[str]:
@@ -236,13 +241,13 @@ def get_offset_ms() -> int:
     return int(_get(["lyrics", "offset_ms"], 0))
 
 def make_song_key(title: str, artist: str = "") -> str:
-    """生成标准化且易读的歌曲键名（例如：'晴天 - 周杰伦'）"""
+    """生成标准化且易读的歌曲键名"""
     t = str(title or "").strip()
     a = str(artist or "").strip()
     return f"{t} - {a}" if a else t
 
 def get_song_offsets() -> dict[str, int]:
-    """读取所有单独配置的歌曲偏移字典（从 SQLite 数据库获取）"""
+    """读取所有单独配置的歌曲偏移字典"""
     try:
         from core import db_cache
         return db_cache.get_all_song_offsets()
@@ -250,7 +255,7 @@ def get_song_offsets() -> dict[str, int]:
         return {}
 
 def get_song_offset(title: str, artist: str = "") -> Optional[int]:
-    """获取指定歌曲的单独偏移量（毫秒，从 SQLite 数据库获取），未单独配置时返回 None"""
+    """获取指定歌曲的单独偏移量"""
     if not title:
         return None
     try:
@@ -260,7 +265,7 @@ def get_song_offset(title: str, artist: str = "") -> Optional[int]:
         return None
 
 def get_effective_song_offset(title: str, artist: str = "") -> int:
-    """获取指定歌曲的最终生效偏移量（优先 SQLite 数据库独立配置，未配置时使用全局默认偏移）"""
+    """获取指定歌曲的最终生效偏移量"""
     val = get_song_offset(title, artist)
     if val is not None:
         return val
@@ -299,6 +304,11 @@ def set_fullscreen_font_size_current(v: int) -> None:
 
 def set_fullscreen_font_size_context(v: int) -> None:
     _set(["fullscreen", "font_size_context"], max(8, min(64, int(v))))
+
+def set_fullscreen_context_secondary_mode(v: str) -> None:
+    if v not in ("none", "translation", "romaji", "both"):
+        v = "both"
+    _set(["fullscreen", "context_secondary_mode"], str(v))
 
 def set_show_translation(v: bool) -> None:
     _set(["lyrics", "show_translation"], bool(v))

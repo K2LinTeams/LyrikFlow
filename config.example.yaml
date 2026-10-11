@@ -21,8 +21,8 @@ font:
 lyrics:
   show_translation: true    # 是否显示双语翻译
   show_romaji: false        # 是否显示罗马音
-  secondary_mode: prefer_trans  # 悬浮窗副行偏好: prefer_trans / prefer_romaji / both
-  show_line_progress: true  # 无逐字歌词时是否显示单句胶囊进度条
+  secondary_mode: prefer_trans  # 悬浮窗副行偏好
+  show_line_progress: false  # 无逐字歌词时是否显示单句胶囊进度条
   offset_ms: 0              # 全局歌词同步时间微调偏移，毫秒
   parse_sections: true      # 是否开启段落与分段角色名解析
 
@@ -30,13 +30,14 @@ fullscreen:
   context_lines: 5          # 全画幅模式上下文阶梯显示行数: 1 ~ 8
   font_size_current: 38     # 全屏当前行歌词字号: 16 ~ 72
   font_size_context: 18     # 全屏上下文行字号: 10 ~ 48
+  context_secondary_mode: both  # 全屏非当前行副行显示内容
 
 smtc:
   watched_apps:             # 监听的音乐软件进程列表，留空为监听全部
     - cloudmusic.exe
 
 theme:
-  preset: "classic"         # 配色预设: classic / sakura / orange / custom
+  preset: "classic"         # 配色预设
   seed_color: "#0B57D0"
   colors:
     lyric_active: "#FFFFFF"

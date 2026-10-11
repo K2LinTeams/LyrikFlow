@@ -57,6 +57,7 @@ class LyricsCanvas(QWidget):
         self._target_offset: float = 0.0
         self._show_translation = settings.get_show_translation()
         self._show_romaji = settings.get_show_romaji()
+        self._context_secondary_mode = settings.get_fullscreen_context_secondary_mode()
         self._parse_sections = settings.get_parse_sections()
         self._context_lines = settings.get_fullscreen_context_lines()
 
@@ -98,6 +99,7 @@ class LyricsCanvas(QWidget):
         self._load_theme_colors()
         self._show_translation = settings.get_show_translation()
         self._show_romaji = settings.get_show_romaji()
+        self._context_secondary_mode = settings.get_fullscreen_context_secondary_mode()
         self._parse_sections = settings.get_parse_sections()
         self._context_lines = settings.get_fullscreen_context_lines()
         cur_sz = settings.get_fullscreen_font_size_current()
@@ -183,6 +185,13 @@ class LyricsCanvas(QWidget):
         self._target_offset = self._calc_offset_for(self._cur_index)
         self.update()
 
+    def set_context_secondary_mode(self, v: str):
+        if v not in ("none", "translation", "romaji", "both"):
+            v = "both"
+        self._context_secondary_mode = v
+        self._target_offset = self._calc_offset_for(self._cur_index)
+        self.update()
+
     def set_parse_sections(self, v: bool):
         self._parse_sections = v
         self._target_offset = self._calc_offset_for(self._cur_index)
@@ -192,6 +201,32 @@ class LyricsCanvas(QWidget):
         super().resizeEvent(event)
         if self._cur_index >= 0:
             self._target_offset = self._calc_offset_for(self._cur_index)
+
+    def _get_line_flags(self, line, dist: int) -> tuple[bool, bool, bool]:
+        """计算指定距离行的副行显示标记: (has_ro, has_tr, has_sec)"""
+        if dist == 0:
+            has_ro = bool(self._show_romaji and line.romaji.strip())
+            has_tr = bool(self._show_translation and line.translation.strip())
+            has_sec = bool(self._parse_sections and (line.section or line.role))
+        else:
+            mode = self._context_secondary_mode
+            if mode == "none":
+                has_ro = False
+                has_tr = False
+                has_sec = False
+            elif mode == "translation":
+                has_ro = False
+                has_tr = bool(self._show_translation and line.translation.strip())
+                has_sec = bool(self._parse_sections and (line.section or line.role))
+            elif mode == "romaji":
+                has_ro = bool(self._show_romaji and line.romaji.strip())
+                has_tr = False
+                has_sec = bool(self._parse_sections and (line.section or line.role))
+            else:  # "both"
+                has_ro = bool(self._show_romaji and line.romaji.strip())
+                has_tr = bool(self._show_translation and line.translation.strip())
+                has_sec = bool(self._parse_sections and (line.section or line.role))
+        return has_ro, has_tr, has_sec
 
     def _calc_offset_for(self, idx: int) -> float:
         """计算让第 idx 行在全屏视口中自然居中的偏移量"""
@@ -203,13 +238,14 @@ class LyricsCanvas(QWidget):
             fnt, has_t = self._line_meta(i, target_idx)
             lh = self._line_height(i, target_idx, has_t)
             if i == target_idx:
+                has_ro, has_tr, has_sec = self._get_line_flags(line, 0)
                 text_h = float(self._fm_cur.height())
                 sub_h = float(self._fm_trans_cur.height() + 6)
-                if self._show_romaji and line.romaji.strip():
+                if has_ro:
                     text_h += sub_h
-                if self._show_translation and line.translation.strip():
+                if has_tr:
                     text_h += sub_h
-                if not (self._show_romaji and line.romaji.strip()) and not (self._show_translation and line.translation.strip()) and self._parse_sections:
+                if not (has_ro or has_tr) and has_sec:
                     sec = line.get_secondary_text(False, False, parse_sections=True)
                     if sec:
                         text_h += sub_h
@@ -229,9 +265,7 @@ class LyricsCanvas(QWidget):
         else:
             fnt = self._font_far
         line = self._lyrics.lines[i]
-        has_ro = bool(self._show_romaji and line.romaji.strip())
-        has_tr = bool(self._show_translation and line.translation.strip())
-        has_sec = bool(self._parse_sections and (line.section or line.role))
+        has_ro, has_tr, has_sec = self._get_line_flags(line, dist)
         has_t = has_ro or has_tr or has_sec
         return fnt, has_t
 
@@ -248,14 +282,13 @@ class LyricsCanvas(QWidget):
             sub_h = float(self._fm_trans_ctx.height() + 6)
 
         line = self._lyrics.lines[i]
-        has_ro = bool(self._show_romaji and line.romaji.strip())
-        has_tr = bool(self._show_translation and line.translation.strip())
+        has_ro, has_tr, has_sec = self._get_line_flags(line, dist)
 
         if has_ro:
             base += sub_h
         if has_tr:
             base += sub_h
-        if not (has_ro or has_tr) and self._parse_sections:
+        if not (has_ro or has_tr) and has_sec:
             sec_text = line.get_secondary_text(False, False, parse_sections=True)
             if sec_text:
                 base += sub_h
@@ -383,8 +416,7 @@ class LyricsCanvas(QWidget):
                 painter.drawText(tx, int(y + fm.ascent()), elided)
 
             # ── 副行绘制 ──
-            has_ro = bool(self._show_romaji and line.romaji.strip())
-            has_tr = bool(self._show_translation and line.translation.strip())
+            has_ro, has_tr, has_sec = self._get_line_flags(line, dist)
             tfnt = self._font_trans_cur if dist == 0 else self._font_trans_ctx
             painter.setFont(tfnt)
             tfm = QFontMetrics(tfnt)
@@ -413,7 +445,7 @@ class LyricsCanvas(QWidget):
                     painter.drawText(ttx, int(sub_y + tfm.ascent()), te)
                 sub_y += tfm.height() + 6
 
-            if not (has_ro or has_tr) and self._parse_sections:
+            if not (has_ro or has_tr) and has_sec:
                 sec_text = line.get_secondary_text(False, False, parse_sections=True)
                 if sec_text:
                     te = tfm.elidedText(sec_text, Qt.TextElideMode.ElideRight, w - 80)

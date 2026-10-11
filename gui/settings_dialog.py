@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QSpinBox, QWidget,
     QScrollArea, QStackedWidget, QFrame, QSizePolicy,
     QAbstractButton, QApplication, QGraphicsDropShadowEffect,
-    QCheckBox, QColorDialog
+    QCheckBox, QColorDialog, QComboBox
 )
 
 try:
@@ -69,7 +69,7 @@ QMessageBox QPushButton:hover {{
     opacity: 0.9;
 }}
 
-QLabel, QPushButton, QLineEdit, QSpinBox {{
+QLabel, QPushButton, QLineEdit, QSpinBox, QComboBox {{
     font-family: {font_css};
 }}
 
@@ -134,6 +134,36 @@ QSpinBox::up-button, QSpinBox::down-button {{
     width: 20px;
     border: none;
     background: transparent;
+}}
+
+/* 下拉选择框 */
+QComboBox {{
+    background: #FFFFFF;
+    border: 1.5px solid #DCE3EE;
+    border-radius: 14px;
+    color: #1B1F24;
+    font-family: {font_css};
+    padding: 6px 14px;
+    font-size: 13px;
+    min-width: 150px;
+}}
+QComboBox:focus, QComboBox:hover {{
+    border: 1.5px solid {primary_hex};
+}}
+QComboBox::drop-down {{
+    border: none;
+    width: 24px;
+}}
+QComboBox QAbstractItemView {{
+    background: #FFFFFF;
+    border: 1.5px solid #DCE3EE;
+    border-radius: 12px;
+    color: #1B1F24;
+    font-family: {font_css};
+    selection-background-color: {container_hex};
+    selection-color: #041E49;
+    padding: 4px;
+    outline: none;
 }}
 
 /* 滑动条 */
@@ -1049,7 +1079,7 @@ class SettingsDialog(QDialog):
         info_title = QLabel("本地字体")
         info_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #041E49;")
         info_desc = QLabel(
-            "按顺序优先使用字体。若某个字形缺失，会自动回退至后续启用的字体及系统字体。"
+            "将会按顺序优先使用字体"
         )
         info_desc.setStyleSheet("font-size: 11px; color: #475467;")
         info_desc.setWordWrap(True)
@@ -1099,7 +1129,7 @@ class SettingsDialog(QDialog):
                 item.widget().deleteLater()
 
         if not self._font_items:
-            empty_lbl = QLabel("data/fonts/ 目录下暂未扫描到字体文件。\n可将 .ttf / .otf 字体文件复制至 data/fonts 目录后点击重新扫描。")
+            empty_lbl = QLabel("data/fonts/ 目录下暂未扫描到字体文件\n可放置在目录后重新扫描")
             empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty_lbl.setStyleSheet("color: #72777A; padding: 40px; font-size: 13px;")
             self._font_list_layout.addWidget(empty_lbl)
@@ -1461,7 +1491,7 @@ class SettingsDialog(QDialog):
         self._set_font_mode("overlay")
         l.addWidget(card_font)
 
-        # 3. 功能开关卡片：双语翻译
+        # 功能开关卡片：双语翻译
         card_trans = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
         trans_l = QHBoxLayout(card_trans)
         trans_l.setContentsMargins(18, 14, 18, 14)
@@ -1470,7 +1500,7 @@ class SettingsDialog(QDialog):
         trans_v.setSpacing(2)
         lbl_trans_t = QLabel("显示双语翻译")
         lbl_trans_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
-        lbl_trans_d = QLabel("若歌曲包含译文则同步显示")
+        lbl_trans_d = QLabel("获取歌词的译文字幕")
         lbl_trans_d.setStyleSheet("font-size: 11px; color: #6E7781;")
         lbl_trans_d.setWordWrap(True)
         trans_v.addWidget(lbl_trans_t)
@@ -1479,14 +1509,13 @@ class SettingsDialog(QDialog):
 
         self._switch_trans = MD3Switch()
         self._switch_trans.setChecked(settings.get_show_translation())
-        self._lbl_prev_trans.setVisible(settings.get_show_translation())
         self._switch_trans.toggled.connect(
-            lambda checked: self._lbl_prev_trans.setVisible(checked)
+            lambda _: self._refresh_preview_visibility()
         )
         trans_l.addWidget(self._switch_trans)
         l.addWidget(card_trans)
 
-        # 4. 功能开关卡片：罗马音
+        # 功能开关卡片：罗马音
         card_roma = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
         roma_l = QHBoxLayout(card_roma)
         roma_l.setContentsMargins(18, 14, 18, 14)
@@ -1495,7 +1524,7 @@ class SettingsDialog(QDialog):
         roma_v.setSpacing(2)
         lbl_roma_t = QLabel("显示罗马音")
         lbl_roma_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
-        lbl_roma_d = QLabel("若歌曲包含注音则同步显示")
+        lbl_roma_d = QLabel("获取歌词的注音字幕")
         lbl_roma_d.setStyleSheet("font-size: 11px; color: #6E7781;")
         lbl_roma_d.setWordWrap(True)
         roma_v.addWidget(lbl_roma_t)
@@ -1504,23 +1533,84 @@ class SettingsDialog(QDialog):
 
         self._switch_roma = MD3Switch()
         self._switch_roma.setChecked(settings.get_show_romaji())
-        self._lbl_prev_roma.setVisible(settings.get_show_romaji())
         self._switch_roma.toggled.connect(
-            lambda checked: self._lbl_prev_roma.setVisible(checked)
+            lambda _: self._refresh_preview_visibility()
         )
         roma_l.addWidget(self._switch_roma)
         l.addWidget(card_roma)
 
-        # 4. 功能开关卡片：非逐字歌词进度条
+        # 功能卡片：悬浮窗副行偏好
+        card_sec_mode = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
+        sec_mode_l = QHBoxLayout(card_sec_mode)
+        sec_mode_l.setContentsMargins(18, 14, 18, 14)
+
+        sec_mode_v = QVBoxLayout()
+        sec_mode_v.setSpacing(2)
+        lbl_sec_mode_t = QLabel("副行显示偏好")
+        lbl_sec_mode_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
+        lbl_sec_mode_d = QLabel("悬浮窗副行内容的呈现方式")
+        lbl_sec_mode_d.setStyleSheet("font-size: 11px; color: #6E7781;")
+        lbl_sec_mode_d.setWordWrap(True)
+        sec_mode_v.addWidget(lbl_sec_mode_t)
+        sec_mode_v.addWidget(lbl_sec_mode_d)
+        sec_mode_l.addLayout(sec_mode_v, 1)
+
+        self._combo_sec_mode = QComboBox()
+        self._combo_sec_mode.addItem("显示译文", "prefer_trans")
+        self._combo_sec_mode.addItem("显示注音", "prefer_romaji")
+        self._combo_sec_mode.addItem("组合显示", "both")
+
+        cur_sec_mode = settings.get_secondary_mode()
+        idx_sm = self._combo_sec_mode.findData(cur_sec_mode)
+        if idx_sm >= 0:
+            self._combo_sec_mode.setCurrentIndex(idx_sm)
+        self._combo_sec_mode.currentIndexChanged.connect(lambda _: self._refresh_preview_visibility())
+        sec_mode_l.addWidget(self._combo_sec_mode)
+        l.addWidget(card_sec_mode)
+        self._refresh_preview_visibility()
+
+        
+        # 全屏非当前行显示内容卡片 (下拉选择框)
+        card_fs_ctx_sec = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
+        fs_ctx_sec_l = QHBoxLayout(card_fs_ctx_sec)
+        fs_ctx_sec_l.setContentsMargins(18, 14, 18, 14)
+
+        fs_ctx_sec_v = QVBoxLayout()
+        fs_ctx_sec_v.setSpacing(2)
+        lbl_fs_ctx_sec_t = QLabel("全屏非当前行显示内容")
+        lbl_fs_ctx_sec_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
+        lbl_fs_ctx_sec_d = QLabel("全屏模式的上下文呈现方式")
+        lbl_fs_ctx_sec_d.setStyleSheet("font-size: 11px; color: #6E7781;")
+        lbl_fs_ctx_sec_d.setWordWrap(True)
+        fs_ctx_sec_v.addWidget(lbl_fs_ctx_sec_t)
+        fs_ctx_sec_v.addWidget(lbl_fs_ctx_sec_d)
+        fs_ctx_sec_l.addLayout(fs_ctx_sec_v, 1)
+
+        self._combo_fs_ctx_sec = QComboBox()
+        self._combo_fs_ctx_sec.addItem("仅主歌词", "none")
+        self._combo_fs_ctx_sec.addItem("显示翻译", "translation")
+        self._combo_fs_ctx_sec.addItem("显示注音", "romaji")
+        self._combo_fs_ctx_sec.addItem("显示两者", "both")
+
+        cur_fs_ctx_mode = settings.get_fullscreen_context_secondary_mode()
+        idx_fs = self._combo_fs_ctx_sec.findData(cur_fs_ctx_mode)
+        if idx_fs >= 0:
+            self._combo_fs_ctx_sec.setCurrentIndex(idx_fs)
+        fs_ctx_sec_l.addWidget(self._combo_fs_ctx_sec)
+        l.addWidget(card_fs_ctx_sec)
+
+        l.addStretch()
+
+        # 功能开关卡片：非逐字歌词进度条
         card_prog = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
         prog_l = QHBoxLayout(card_prog)
         prog_l.setContentsMargins(18, 14, 18, 14)
 
         prog_v = QVBoxLayout()
         prog_v.setSpacing(2)
-        lbl_prog_t = QLabel("非逐字歌词进度条")
+        lbl_prog_t = QLabel("标准歌词进度条")
         lbl_prog_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
-        lbl_prog_d = QLabel("播放无逐字歌词歌曲时，在当前歌词下方显示单句胶囊进度条")
+        lbl_prog_d = QLabel("在标准歌词下方显示单句胶囊进度条")
         lbl_prog_d.setStyleSheet("font-size: 11px; color: #6E7781;")
         lbl_prog_d.setWordWrap(True)
         prog_v.addWidget(lbl_prog_t)
@@ -1541,7 +1631,7 @@ class SettingsDialog(QDialog):
         sec_v.setSpacing(2)
         lbl_sec_t = QLabel("歌词段落解析")
         lbl_sec_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
-        lbl_sec_d = QLabel("识别段落章节与分段角色名，隐藏标记行并将角色同步至翻译行")
+        lbl_sec_d = QLabel("识别段落章节和角色名，显示在副行（如可能）")
         lbl_sec_d.setStyleSheet("font-size: 11px; color: #6E7781;")
         lbl_sec_d.setWordWrap(True)
         sec_v.addWidget(lbl_sec_t)
@@ -1563,7 +1653,7 @@ class SettingsDialog(QDialog):
         lbl_fs_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
         fs_l.addWidget(lbl_fs_t)
 
-        lbl_fs_d = QLabel("当前高亮歌词上下各显示的行数 (1 ~ 8 行，阶梯渐隐)")
+        lbl_fs_d = QLabel("当前高亮歌词上下各显示的行数")
         lbl_fs_d.setStyleSheet("font-size: 11px; color: #6E7781;")
         lbl_fs_d.setWordWrap(True)
         fs_l.addWidget(lbl_fs_d)
@@ -1585,8 +1675,6 @@ class SettingsDialog(QDialog):
         fs_l.addLayout(ctrl_fs)
 
         l.addWidget(card_fs)
-
-        l.addStretch()
         return page
 
     def _create_lyric_override_card(self) -> QWidget:
@@ -1647,11 +1735,11 @@ class SettingsDialog(QDialog):
         # 平台筛选 Chips
         row_chips = QHBoxLayout()
         row_chips.setSpacing(8)
-        row_chips.addWidget(QLabel("检索音源：", styleSheet="font-size: 11px; color: #6E7781;"))
+        row_chips.addWidget(QLabel("检索来源：", styleSheet="font-size: 11px; color: #6E7781;"))
 
         self._override_provider_filter = "all"
         self._provider_chips = {}
-        providers = [("全部音源", "all"), ("网易云音乐", "netease"), ("QQ 音乐", "qqmusic"), ("LRCLIB", "lrclib")]
+        providers = [("全部提供商", "all"), ("网易云音乐", "netease"), ("QQ 音乐", "qqmusic"), ("LRCLIB", "lrclib")]
         for p_name, p_code in providers:
             btn = QPushButton(p_name)
             if p_code == "all":
@@ -1683,7 +1771,7 @@ class SettingsDialog(QDialog):
         self._results_layout.setContentsMargins(8, 8, 8, 8)
         self._results_layout.setSpacing(6)
 
-        self._lbl_empty_results = QLabel("点击上方“搜索版本”即可拉取各平台候选歌曲列表供您指定选择")
+        self._lbl_empty_results = QLabel("可点击上方搜索以获取可用来源")
         self._lbl_empty_results.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_empty_results.setStyleSheet("font-size: 12px; color: #8C939E; padding: 20px 0;")
         self._results_layout.addWidget(self._lbl_empty_results)
@@ -1967,9 +2055,9 @@ class SettingsDialog(QDialog):
                 from PyQt6.QtWidgets import QMessageBox
                 tip = ""
                 if item.provider.lower() == "qqmusic":
-                    tip = "\n\n该条目暂未拥有歌词数据，尝试一下其他音源吧。"
+                    tip = "\n\n该条目暂未拥有歌词数据，尝试一下其他音源吧"
                 elif item.provider.lower() == "netease":
-                    tip = "\n\n该条目暂未拥有歌词数据，尝试一下其他音源吧。"
+                    tip = "\n\n该条目暂未拥有歌词数据，尝试一下其他音源吧"
                 QMessageBox.warning(self, "应用失败", f"无法获取此版本的歌词：{msg}{tip}")
 
         self._apply_worker.apply_finished.connect(on_done)
@@ -2070,6 +2158,39 @@ class SettingsDialog(QDialog):
             self._lbl_prev_cur.setFont(font_manager.make_app_font(cur_sz, bold=True, families=active_families))
             self._lbl_prev_roma.setFont(font_manager.make_app_font(ctx_sz, bold=False, families=active_families))
             self._lbl_prev_trans.setFont(font_manager.make_app_font(ctx_sz, bold=False, families=active_families))
+        self._refresh_preview_visibility()
+
+    def _refresh_preview_visibility(self):
+        if not hasattr(self, "_lbl_prev_roma") or not hasattr(self, "_lbl_prev_trans"):
+            return
+        has_tr = self._switch_trans.isChecked() if hasattr(self, "_switch_trans") else settings.get_show_translation()
+        has_ro = self._switch_roma.isChecked() if hasattr(self, "_switch_roma") else settings.get_show_romaji()
+        mode = getattr(self, "_font_mode", "overlay")
+        if mode == "fullscreen":
+            self._lbl_prev_roma.setText("fu ka kai na, fu kan zen na ma hou")
+            self._lbl_prev_roma.setVisible(has_ro)
+            self._lbl_prev_trans.setText("不可解的、不完全的魔法")
+            self._lbl_prev_trans.setVisible(has_tr)
+        else:
+            sec_mode = self._combo_sec_mode.currentData() if hasattr(self, "_combo_sec_mode") else settings.get_secondary_mode()
+            if has_tr and has_ro:
+                if sec_mode == "prefer_trans":
+                    self._lbl_prev_roma.setVisible(False)
+                    self._lbl_prev_trans.setText("不可解的、不完全的魔法")
+                    self._lbl_prev_trans.setVisible(True)
+                elif sec_mode == "prefer_romaji":
+                    self._lbl_prev_roma.setText("fu ka kai na, fu kan zen na ma hou")
+                    self._lbl_prev_roma.setVisible(True)
+                    self._lbl_prev_trans.setVisible(False)
+                else:  # "both"
+                    self._lbl_prev_roma.setText("fu ka kai na  ·  不可解的、不完全的魔法")
+                    self._lbl_prev_roma.setVisible(True)
+                    self._lbl_prev_trans.setVisible(False)
+            else:
+                self._lbl_prev_roma.setText("fu ka kai na, fu kan zen na ma hou")
+                self._lbl_prev_trans.setText("不可解的、不完全的魔法")
+                self._lbl_prev_roma.setVisible(has_ro)
+                self._lbl_prev_trans.setVisible(has_tr)
 
     # ── TAB 3: 配色方案与 MD 色彩自动生成 ──────────────────────────────────────
     def _create_theme_page(self) -> QWidget:
@@ -2753,7 +2874,7 @@ class SettingsDialog(QDialog):
             self._spin_song_off = None
             self._lbl_live_offset_badge = None
             self._song_chip_buttons = []
-            lbl_no_song = QLabel("当前未检测到播放中的歌曲。播放时可在此单独微调。")
+            lbl_no_song = QLabel("当前未检测到播放中的歌曲 播放时可在此单独微调")
             lbl_no_song.setStyleSheet("font-size: 12px; color: #6E7781; line-height: 1.4;")
             csl.addWidget(lbl_no_song)
 
@@ -2838,7 +2959,7 @@ class SettingsDialog(QDialog):
         self._lbl_custom_songs_count.setText(f"已单独配置的歌曲 ({count} 首)")
 
         if not self._song_offsets_draft:
-            empty_lbl = QLabel("暂无单独配置的歌曲记录。")
+            empty_lbl = QLabel("暂无单独配置的歌曲记录")
             empty_lbl.setStyleSheet("color: #8C939E; font-size: 12px; padding: 4px 2px;")
             self._custom_songs_container.addWidget(empty_lbl)
             return
@@ -2926,6 +3047,14 @@ class SettingsDialog(QDialog):
             self._spin_fs_ctx.setValue(18)
         self._switch_trans.setChecked(True)
         self._switch_roma.setChecked(False)
+        if hasattr(self, "_combo_sec_mode"):
+            idx_sm = self._combo_sec_mode.findData("prefer_trans")
+            if idx_sm >= 0:
+                self._combo_sec_mode.setCurrentIndex(idx_sm)
+        if hasattr(self, "_combo_fs_ctx_sec"):
+            idx_fs = self._combo_fs_ctx_sec.findData("both")
+            if idx_fs >= 0:
+                self._combo_fs_ctx_sec.setCurrentIndex(idx_fs)
         self._switch_progress.setChecked(True)
         self._switch_sections.setChecked(True)
         self._spin_fs_lines.setValue(5)
@@ -2957,6 +3086,10 @@ class SettingsDialog(QDialog):
         settings.set_watched_apps(apps)
         settings.set_show_translation(self._switch_trans.isChecked())
         settings.set_show_romaji(self._switch_roma.isChecked())
+        if hasattr(self, "_combo_sec_mode"):
+            settings.set_secondary_mode(self._combo_sec_mode.currentData() or "prefer_trans")
+        if hasattr(self, "_combo_fs_ctx_sec"):
+            settings.set_fullscreen_context_secondary_mode(self._combo_fs_ctx_sec.currentData() or "both")
         settings.set_show_line_progress(self._switch_progress.isChecked())
         settings.set_parse_sections(self._switch_sections.isChecked())
         settings.set_font_size_current(self._spin_cur.value())
