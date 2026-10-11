@@ -144,6 +144,16 @@ class QQMusicLyricProvider(BaseLyricProvider):
         return []
 
     def search_song(self, title: str, artist: str, extra_artists: Optional[list[str]] = None) -> Optional[SearchSongItem]:
+        item, _ = self.search_song_with_lyrics(title, artist, extra_artists=extra_artists)
+        return item
+
+    def search_song_with_lyrics(
+        self,
+        title: str,
+        artist: str,
+        extra_artists: Optional[list[str]] = None,
+    ) -> tuple[Optional[SearchSongItem], Optional[RawLyricResult]]:
+        """搜索歌曲并返回 (item, 探测到的歌词)，避免上层重复拉取。"""
         t_strip = title.strip()
         if t_strip.isdigit() and len(t_strip) >= 4:
             direct_item = SearchSongItem(
@@ -159,7 +169,7 @@ class QQMusicLyricProvider(BaseLyricProvider):
             )
             lyr = self.get_lyrics(direct_item)
             if lyr:
-                return direct_item
+                return direct_item, lyr
 
         candidates = self._generate_query_candidates(title, artist)
         all_songs: list[dict] = []
@@ -171,26 +181,26 @@ class QQMusicLyricProvider(BaseLyricProvider):
                 break
 
         if not all_songs:
-            return None
+            return None, None
 
         ranked = self._rank_candidates(all_songs, title, artist, extra_artists=extra_artists)
         if not ranked:
-            return None
+            return None, None
 
-        # 优先挑选：按相关度从高到低探测，如果最高候选本身没有歌词，则顺位回退到同曲目的其他候选
+        # 优先挑选：按相关度从高到低探测，探测到的歌词直接返回
         for cand_song in ranked[:3]:
             try:
                 item = self._parse_song_item(cand_song)
                 lyr = self.get_lyrics(item)
                 if lyr and (lyr.qrc or lyr.lrc):
-                    return item
+                    return item, lyr
             except Exception:
                 pass
-        # 如果前几个候选都没有歌词，返回第一候选
+        # 前几个候选均无歌词，返回第一候选
         try:
-            return self._parse_song_item(ranked[0])
+            return self._parse_song_item(ranked[0]), None
         except Exception:
-            return None
+            return None, None
 
     def _rank_candidates(
         self,
@@ -242,9 +252,16 @@ class QQMusicLyricProvider(BaseLyricProvider):
         target_artists: set[str] = set()
         if artist.strip():
             for p in re.split(r"[/&,、+，]|feat\.?|with", artist.lower()):
-                p_norm = normalize_str(p.strip(), strip_brackets=False)
-                if p_norm:
-                    target_artists.add(p_norm)
+                p_raw = p.strip()
+                # 提取括号内的备注/组名（如 supercell）
+                for b in re.findall(r"[\(\[（【](.*?)[\)\]）】]", p_raw):
+                    b_norm = normalize_str(b.strip(), strip_brackets=False)
+                    if len(b_norm) >= 2:
+                        target_artists.add(b_norm)
+                # 提取去括号后的主体歌手（如 ryo）
+                p_core = normalize_str(p_raw, strip_brackets=True)
+                if p_core:
+                    target_artists.add(p_core)
 
         if extra_artists:
             for extra in extra_artists:

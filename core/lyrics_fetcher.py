@@ -164,17 +164,23 @@ def fetch_lyrics_multi(
     def _worker_qq():
         nonlocal raw_qq, item_qq, cover_qq
         try:
-            item_qq = QQMUSIC_PROVIDER.search_song(title, artist)
+            item_qq, pre_lyr = QQMUSIC_PROVIDER.search_song_with_lyrics(title, artist)
             if item_qq and not _is_matching_title(item_qq.title, title):
                 item_qq = None
+                pre_lyr = None
             if item_qq and (not is_cancelled or not is_cancelled()):
                 if item_qq.sub_name:
                     _update_sub_name(item_qq.sub_name, is_qq=True)
-                if item_qq.pic_url:
+                # 优先复用探测好的歌词，避免重复请求
+                if pre_lyr:
+                    raw_qq = pre_lyr
+                else:
+                    raw_qq = QQMUSIC_PROVIDER.get_lyrics(item_qq)
+                # 封面下载放在歌词就绪后，避免阻塞歌词
+                if item_qq.pic_url and (not is_cancelled or not is_cancelled()):
                     cover_qq = QQMUSIC_PROVIDER.download_cover(item_qq.pic_url)
                     if cover_qq and (not is_cancelled or not is_cancelled()):
                         _update_cover(cover_qq, is_qq=True)
-                raw_qq = QQMUSIC_PROVIDER.get_lyrics(item_qq)
         except Exception as e:
             print(f"[lyrics_fetcher] qqmusic 并行获取异常: {e}")
 
