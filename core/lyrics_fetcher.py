@@ -262,6 +262,7 @@ def fetch_lyrics_multi(
     if not final_lyrics and raw_netease and raw_netease.yrc:
         parsed_netease = parse_raw_bundle(
             yrc_text=raw_netease.yrc,
+            lrc_text=raw_netease.lrc,
             tlyric_text=raw_netease.tlyric,
             romalrc_text=raw_netease.romalrc,
             title=item_netease.title if item_netease else title,
@@ -275,10 +276,12 @@ def fetch_lyrics_multi(
 
     # 【Tier 2】QQ 音乐 QRC 逐字
     if not final_lyrics and raw_qq and raw_qq.qrc:
+        cross_lrc = raw_qq.lrc or (raw_netease.lrc if raw_netease else "")
         cross_trans = raw_qq.tlyric or (raw_netease.tlyric if raw_netease else "")
         cross_roma = raw_qq.romalrc or (raw_netease.romalrc if raw_netease else "")
         parsed_qq = parse_raw_bundle(
             qrc_text=raw_qq.qrc,
+            lrc_text=cross_lrc,
             tlyric_text=cross_trans,
             romalrc_text=cross_roma,
             title=item_qq.title if item_qq else title,

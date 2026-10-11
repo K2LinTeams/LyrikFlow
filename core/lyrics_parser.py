@@ -200,6 +200,18 @@ NUMERIC_TAG_RE = re.compile(r"^(?:\d+|[IVXLCDMivxlcdm]+)$")
 
 INSTRUMENTAL_KEYWORDS = ("纯音乐", "没有填词", "暂无歌词")
 
+NOISE_SECONDARY_RE = re.compile(
+    r"^[\(（\[【\s]*(?:间奏|伴奏|前奏|尾奏|纯音乐|没有填词|暂无歌词|instrumental|interlude|intro|outro)[\)）\]】\s]*$",
+    re.IGNORECASE,
+)
+
+
+def _is_noise_secondary_text(txt: str) -> bool:
+    t = txt.strip()
+    if not t or t.startswith("//"):
+        return True
+    return bool(NOISE_SECONDARY_RE.match(t))
+
 
 def _lrc_time_to_ms(m_str: str, s_str: str, ms_str: str) -> int:
     ms = int(ms_str[:3].ljust(3, "0")) if ms_str else 0
@@ -657,29 +669,101 @@ def _match_timeline_entries(lines: list[LyricLine], entries: list[tuple[int, str
     if not lines or not entries:
         return
 
-    entries.sort(key=lambda x: x[0])
-    entry_idx = 0
-    num_entries = len(entries)
+    # 1. 过滤无效副歌词
+    filtered_entries: list[tuple[int, str]] = []
+    for t_ms, txt in entries:
+        txt_clean = txt.strip()
+        if not _is_noise_secondary_text(txt_clean):
+            filtered_entries.append((t_ms, txt_clean))
 
-    for line in lines:
-        if not line.text.strip():
-            continue
+    if not filtered_entries:
+        return
 
-        best_idx = -1
-        best_diff = float("inf")
+    filtered_entries.sort(key=lambda x: x[0])
 
-        for j in range(entry_idx, num_entries):
-            t_ms, _ = entries[j]
-            diff = abs(line.time_ms - t_ms)
-            if diff < best_diff:
-                best_diff = diff
-                best_idx = j
-            elif t_ms > line.time_ms + 3000:
-                break
+    # 2. 收集非空歌词行
+    valid_lines: list[tuple[int, LyricLine]] = []
+    for idx, line in enumerate(lines):
+        if line.text.strip():
+            valid_lines.append((idx, line))
 
-        if best_idx != -1 and best_diff <= 2500:
-            setattr(line, attr_name, entries[best_idx][1])
-            entry_idx = best_idx + 1
+    if not valid_lines:
+        return
+
+    n = len(valid_lines)
+    m = len(filtered_entries)
+
+    # 3. 单调序列对齐
+    MAX_TIME_DIFF = 3500      # 超过 3.5 秒认为不可对齐
+    SKIP_LINE_PENALTY = 5.0
+    SKIP_ENTRY_PENALTY = 4.0
+
+    def calc_match_cost(line_time: int, entry_time: int) -> float:
+        d = abs(line_time - entry_time)
+        if d > MAX_TIME_DIFF:
+            return float("inf")
+        # 非线性时间代价函数：0.2s -> 0.16, 0.5s -> 0.66, 1s -> 1.8, 1.5s -> 3.5, 2s -> 5.8
+        return 1.8 * ((d / 1000.0) ** 1.7)
+
+    dp = [[float("inf")] * (m + 1) for _ in range(n + 1)]
+    parent = [[-1] * (m + 1) for _ in range(n + 1)]
+
+    dp[0][0] = 0.0
+    for j in range(1, m + 1):
+        dp[0][j] = dp[0][j - 1] + SKIP_ENTRY_PENALTY
+        parent[0][j] = 2
+
+    for i in range(1, n + 1):
+        dp[i][0] = dp[i - 1][0] + SKIP_LINE_PENALTY
+        parent[i][0] = 1
+
+    for i in range(1, n + 1):
+        line_time = valid_lines[i - 1][1].time_ms
+        for j in range(1, m + 1):
+            e_time = filtered_entries[j - 1][0]
+
+            # 选项 1: 跳过歌词行 i
+            cost_skip_line = dp[i - 1][j] + SKIP_LINE_PENALTY
+            best_cost = cost_skip_line
+            best_act = 1
+
+            # 选项 2: 跳过翻译条目 j
+            cost_skip_entry = dp[i][j - 1] + SKIP_ENTRY_PENALTY
+            if cost_skip_entry < best_cost:
+                best_cost = cost_skip_entry
+                best_act = 2
+
+            # 选项 3: 将歌词行 i 与翻译条目 j 对齐
+            m_cost = calc_match_cost(line_time, e_time)
+            if m_cost != float("inf"):
+                cost_match = dp[i - 1][j - 1] + m_cost
+                if cost_match < best_cost:
+                    best_cost = cost_match
+                    best_act = 0
+
+            dp[i][j] = best_cost
+            parent[i][j] = best_act
+
+    # 回溯最优对齐路径
+    curr_i, curr_j = n, m
+    matched_pairs: list[tuple[int, int]] = []
+    while curr_i > 0 or curr_j > 0:
+        act = parent[curr_i][curr_j]
+        if act == 0:
+            matched_pairs.append((curr_i - 1, curr_j - 1))
+            curr_i -= 1
+            curr_j -= 1
+        elif act == 1:
+            curr_i -= 1
+        elif act == 2:
+            curr_j -= 1
+        else:
+            break
+
+    matched_pairs.reverse()
+    for l_pos, e_idx in matched_pairs:
+        orig_line_idx, line_obj = valid_lines[l_pos]
+        setattr(line_obj, attr_name, filtered_entries[e_idx][1])
 
 
 def _attach_translations(lines: list[LyricLine], tlyric_text: str) -> None:
@@ -696,7 +780,7 @@ def _attach_translations(lines: list[LyricLine], tlyric_text: str) -> None:
         if not ts:
             continue
         text = _LRC_TIME_RE.sub("", raw).strip()
-        if not text or _is_instrumental_text(text) or text.startswith("//"):
+        if not text or _is_noise_secondary_text(text):
             continue
         for m_str, s_str, ms_str in ts:
             entries.append((_lrc_time_to_ms(m_str, s_str, ms_str), text))
@@ -724,14 +808,14 @@ def _attach_romaji(lines: list[LyricLine], romalrc_text: str) -> None:
         m_ms = _MS_LINE_RE.match(raw)
         if m_ms:
             clean_text = _clean_romaji_line(raw)
-            if clean_text and not _is_instrumental_text(clean_text) and not clean_text.startswith("//"):
+            if clean_text and not _is_noise_secondary_text(clean_text):
                 entries.append((int(m_ms.group(1)), clean_text))
             continue
 
         ts = _LRC_TIME_RE.findall(raw)
         if ts:
             clean_text = _clean_romaji_line(raw)
-            if not clean_text or _is_instrumental_text(clean_text) or clean_text.startswith("//"):
+            if not clean_text or _is_noise_secondary_text(clean_text):
                 continue
             for m_str, s_str, ms_str in ts:
                 entries.append((_lrc_time_to_ms(m_str, s_str, ms_str), clean_text))
