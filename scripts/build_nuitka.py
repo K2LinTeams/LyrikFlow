@@ -118,9 +118,6 @@ def run_nuitka(clean: bool = False) -> str:
     if icon_path and os.path.exists(icon_path):
         cmd.append(f"--windows-icon-from-ico={icon_path}")
 
-    if os.environ.get("GITHUB_ACTIONS") or shutil.which("cl.exe"):
-        cmd.append("--msvc=latest")
-
     cmd.append("--include-package=winrt")
 
     cmd.append(main_script)
