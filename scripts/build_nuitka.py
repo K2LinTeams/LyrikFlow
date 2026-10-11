@@ -97,8 +97,8 @@ def run_nuitka(clean: bool = False) -> str:
         "--windows-file-description=LyrikFlow - Desktop Floating Lyrics",
         "--include-package=core",
         "--include-package=gui",
-        "--include-package=Crypto",
         "--include-package=yaml",
+        "--include-windows-runtime-dlls=no",
         "--nofollow-import-to=PyQt6.QtPdf",
         "--nofollow-import-to=PyQt6.QtNetwork",
         "--nofollow-import-to=PyQt6.QtSvg",
@@ -106,7 +106,6 @@ def run_nuitka(clean: bool = False) -> str:
         "--nofollow-import-to=PyQt6.QtQuick",
         "--nofollow-import-to=PyQt6.QtSql",
         "--nofollow-import-to=PyQt6.QtPrintSupport",
-        "--nofollow-import-to=Crypto.SelfTest",
         "--noinclude-qt-translations",
     ]
 

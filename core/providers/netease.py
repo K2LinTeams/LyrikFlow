@@ -8,9 +8,8 @@ import json
 from typing import Optional
 
 import requests
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad
 
+from .aes_ecb import encrypt_aes_128_ecb
 from .base import BaseLyricProvider, RawLyricResult, SearchSongItem, get_shared_session
 
 EAPI_KEY = b"e82ckenh8dichen8"
@@ -33,8 +32,7 @@ def eapi_encrypt(url: str, data: dict) -> str:
     message = f"nobody{url}use{text}md5forencrypt"
     digest = hashlib.md5(message.encode("utf-8")).hexdigest()
     data_str = f"{url}-36cd479b6b5-{text}-36cd479b6b5-{digest}"
-    cipher = AES.new(EAPI_KEY, AES.MODE_ECB)
-    return cipher.encrypt(pad(data_str.encode("utf-8"), 16)).hex().upper()
+    return encrypt_aes_128_ecb(EAPI_KEY, data_str.encode("utf-8")).hex().upper()
 
 
 class NeteaseLyricProvider(BaseLyricProvider):
