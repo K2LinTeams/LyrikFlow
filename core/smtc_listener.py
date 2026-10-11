@@ -82,14 +82,9 @@ class SMTCListener(QThread):
         asyncio.run(self._main_loop())
 
     async def _main_loop(self) -> None:
-        try:
-            from winrt.windows.media.control import (
-                GlobalSystemMediaTransportControlsSessionManager as MediaManager,
-            )
-        except ImportError:
-            from winsdk.windows.media.control import (
-                GlobalSystemMediaTransportControlsSessionManager as MediaManager,
-            )
+        from winrt.windows.media.control import (
+            GlobalSystemMediaTransportControlsSessionManager as MediaManager,
+        )
 
         self._loop = asyncio.get_running_loop()
         tick_interval = 0.15       # 进度更新间隔
@@ -551,14 +546,9 @@ class SMTCListener(QThread):
     @staticmethod
     async def _fetch_thumbnail(props) -> bytes:
         try:
-            try:
-                from winrt.windows.storage.streams import (
-                    Buffer, DataReader, InputStreamOptions,
-                )
-            except ImportError:
-                from winsdk.windows.storage.streams import (
-                    Buffer, DataReader, InputStreamOptions,
-                )
+            from winrt.windows.storage.streams import (
+                Buffer, DataReader, InputStreamOptions,
+            )
 
             thumb_ref = props.thumbnail
             if not thumb_ref:

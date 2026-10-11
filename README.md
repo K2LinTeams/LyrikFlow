@@ -6,7 +6,7 @@
 
 ```powershell
 # 安装依赖
-pip install PyQt6 PyQt6-Frameless-Window winsdk requests
+pip install -r requirements.txt
 
 # 启动
 python main.py
@@ -61,7 +61,6 @@ LyrikFlow/
 - 网易云音乐通过 SMTC **不暴露播放进度**，歌词同步靠本地计时器估算。
   快进后会有误差，因此不建议拖动进度条，校准请使用切歌。
 - 网易云 API 获取失败时自动回退到 LRCLIB（英文歌曲覆盖更好）。
-- 需要 **Python 3.9+ 64位（CPython）**，不支持 MSYS2 Python。
 
 ## 打包与发布 (Nuitka)
 

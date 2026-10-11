@@ -50,7 +50,7 @@ class SleepInhibitor:
                 ret = self._set_thread_execution_state(flags)
                 if ret != 0:
                     self._is_active = True
-                    print("[SleepInhibitor] 已激活防熄屏与防睡眠 (全屏播放中)")
+                    print("[SleepInhibitor] 已激活屏幕常亮")
                     return True
                 else:
                     print("[SleepInhibitor] SetThreadExecutionState 调用返回 0，未生效")
@@ -58,7 +58,7 @@ class SleepInhibitor:
             else:
                 ret = self._set_thread_execution_state(ES_CONTINUOUS)
                 self._is_active = False
-                print("[SleepInhibitor] 已释放防熄屏 (恢复系统电源策略)")
+                print("[SleepInhibitor] 已释放屏幕常亮")
                 return True
         except Exception as e:
             print(f"[SleepInhibitor] 调用 SetThreadExecutionState 异常: {e}")
