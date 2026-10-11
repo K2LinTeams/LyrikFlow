@@ -14,6 +14,7 @@ try:
     from core import settings, db_cache, lyrics_fetcher, lyrics_parser
     from core.lyrics_parser import ParsedLyrics
     from core.smtc_listener import SMTCListener
+    from core.sleep_inhibitor import inhibitor
     from gui.overlay_widget import OverlayWidget
     from gui.fullscreen_widget import FullscreenWidget
     from gui.settings_dialog import SettingsDialog
@@ -24,6 +25,7 @@ except ImportError:
     import lyrics_parser
     from lyrics_parser import ParsedLyrics
     from smtc_listener import SMTCListener
+    from sleep_inhibitor import inhibitor
     from overlay_widget import OverlayWidget
     from fullscreen_widget import FullscreenWidget
     from settings_dialog import SettingsDialog
@@ -89,6 +91,7 @@ class LyricsWindow(QObject):
         self._current_title: str  = ""
         self._current_artist: str = ""
         self._thumb_bytes: bytes  = b""
+        self._is_playing: bool    = False
         self._fetch_thread: Optional[FetchThread] = None
 
         # ── 创建 UI ──────────────────────────────────────────────────────
@@ -127,6 +130,13 @@ class LyricsWindow(QObject):
             self._fullscreen.raise_()
             self._fullscreen.activateWindow()
         self._push_lyrics_to_ui()
+        self._update_sleep_inhibit()
+
+    def _update_sleep_inhibit(self) -> None:
+        prevent_sleep = settings.get_fullscreen_prevent_sleep()
+        is_fs = (self._mode == "fullscreen")
+        should_inhibit = bool(prevent_sleep and is_fs and self._is_playing)
+        inhibitor.set_stay_awake(should_inhibit)
 
     # ── SMTC 信号处理 ─────────────────────────────────────────────────────────
     def _on_song_changed(self, title: str, artist: str, thumb_bytes: bytes) -> None:
@@ -140,8 +150,10 @@ class LyricsWindow(QObject):
 
         # 同步播放状态并重置进度
         is_playing = self.smtc._is_playing
+        self._is_playing = is_playing
         self._overlay.set_playing(is_playing)
         self._fullscreen.set_playing(is_playing)
+        self._update_sleep_inhibit()
         init_ms = self.smtc._get_elapsed_ms()
         self._overlay.set_current_time(init_ms, -1)
         self._fullscreen.set_current_time(init_ms, -1)
@@ -194,8 +206,10 @@ class LyricsWindow(QObject):
         self._tray.setToolTip(f"LyrikFlow — {title}\n{artist}")
 
     def _on_playback_state(self, is_playing: bool) -> None:
+        self._is_playing = is_playing
         self._overlay.set_playing(is_playing)
         self._fullscreen.set_playing(is_playing)
+        self._update_sleep_inhibit()
 
     def _on_tick(self, elapsed_ms: int) -> None:
         if not self._lyrics:
@@ -308,6 +322,7 @@ class LyricsWindow(QObject):
             self._overlay.reload_settings()
             self._fullscreen.reload_settings()
             self._reload_current_song_lyrics()
+            self._update_sleep_inhibit()
         else:
             self._overlay.set_live_opacity(initial_opacity)
             initial_offset = settings.get_effective_song_offset(self._current_title, self._current_artist)
@@ -404,5 +419,6 @@ class LyricsWindow(QObject):
                     self._overlay.raise_()
 
     def cleanup(self) -> None:
+        inhibitor.cleanup()
         self.smtc.stop()
         self.smtc.wait(2000)

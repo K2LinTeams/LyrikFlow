@@ -31,6 +31,7 @@ fullscreen:
   font_size_current: 38     # 全屏当前行歌词字号: 16 ~ 72
   font_size_context: 18     # 全屏上下文行字号: 10 ~ 48
   context_secondary_mode: both  # 全屏非当前行副行显示内容
+  prevent_sleep: true       # 全屏播放时防止熄屏与系统休眠
 
 smtc:
   watched_apps:             # 监听的音乐软件进程列表，留空为监听全部

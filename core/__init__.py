@@ -12,6 +12,7 @@ from .settings import (
     get_fullscreen_font_size_current, set_fullscreen_font_size_current,
     get_fullscreen_font_size_context, set_fullscreen_font_size_context,
     get_fullscreen_context_secondary_mode, set_fullscreen_context_secondary_mode,
+    get_fullscreen_prevent_sleep, set_fullscreen_prevent_sleep,
     get_show_translation, set_show_translation,
     get_show_romaji, set_show_romaji,
     get_secondary_mode, set_secondary_mode,
@@ -63,6 +64,7 @@ from .lyrics_parser import (
     parse_lrc,
 )
 from .smtc_listener import SMTCListener
+from .sleep_inhibitor import SleepInhibitor, inhibitor
 
 __all__ = [
     # settings
@@ -73,6 +75,7 @@ __all__ = [
     "get_fullscreen_font_size_current", "set_fullscreen_font_size_current",
     "get_fullscreen_font_size_context", "set_fullscreen_font_size_context",
     "get_fullscreen_context_secondary_mode", "set_fullscreen_context_secondary_mode",
+    "get_fullscreen_prevent_sleep", "set_fullscreen_prevent_sleep",
     "get_show_translation", "set_show_translation",
     "get_show_romaji", "set_show_romaji",
     "get_secondary_mode", "set_secondary_mode",
@@ -96,4 +99,6 @@ __all__ = [
     "ParsedLyrics", "LyricLine", "LyricWord", "parse_raw_bundle", "parse_yrc", "parse_qrc", "parse_lrc",
     # smtc_listener
     "SMTCListener",
+    # sleep_inhibitor
+    "SleepInhibitor", "inhibitor",
 ]

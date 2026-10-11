@@ -61,6 +61,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "font_size_current": 38,
         "font_size_context": 18,
         "context_secondary_mode": "both",
+        "prevent_sleep": True,
     },
     "smtc": {
         "watched_apps": ["cloudmusic.exe"],
@@ -218,6 +219,10 @@ def get_fullscreen_context_secondary_mode() -> str:
     """全屏非当前行副行显示内容"""
     return str(_get(["fullscreen", "context_secondary_mode"], "both"))
 
+def get_fullscreen_prevent_sleep() -> bool:
+    """全屏模式屏幕常亮"""
+    return bool(_get(["fullscreen", "prevent_sleep"], True))
+
 def get_show_translation() -> bool:
     return bool(_get(["lyrics", "show_translation"], True))
 
@@ -333,6 +338,9 @@ def set_fullscreen_context_secondary_mode(v: str) -> None:
     if v not in ("none", "translation", "romaji", "both"):
         v = "both"
     _set(["fullscreen", "context_secondary_mode"], str(v))
+
+def set_fullscreen_prevent_sleep(v: bool) -> None:
+    _set(["fullscreen", "prevent_sleep"], bool(v))
 
 def set_show_translation(v: bool) -> None:
     _set(["lyrics", "show_translation"], bool(v))

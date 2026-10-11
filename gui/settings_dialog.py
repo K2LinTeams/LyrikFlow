@@ -1674,6 +1674,28 @@ class SettingsDialog(QDialog):
         fs_l.addLayout(ctrl_fs)
 
         l.addWidget(card_fs)
+
+        # 5. 全屏播放防熄屏开关卡片
+        card_fs_sleep = MD3Card(bg="#FFFFFF", border="#E1E8F5", radius=18)
+        fs_sleep_l = QHBoxLayout(card_fs_sleep)
+        fs_sleep_l.setContentsMargins(18, 14, 18, 14)
+
+        fs_sleep_v = QVBoxLayout()
+        fs_sleep_v.setSpacing(2)
+        lbl_fs_sleep_t = QLabel("屏幕常亮")
+        lbl_fs_sleep_t.setStyleSheet("font-size: 14px; font-weight: 600; color: #1B1F24;")
+        lbl_fs_sleep_d = QLabel("以全屏模式播放时将保持不熄屏")
+        lbl_fs_sleep_d.setStyleSheet("font-size: 11px; color: #6E7781;")
+        lbl_fs_sleep_d.setWordWrap(True)
+        fs_sleep_v.addWidget(lbl_fs_sleep_t)
+        fs_sleep_v.addWidget(lbl_fs_sleep_d)
+        fs_sleep_l.addLayout(fs_sleep_v, 1)
+
+        self._switch_fs_prevent_sleep = MD3Switch()
+        self._switch_fs_prevent_sleep.setChecked(settings.get_fullscreen_prevent_sleep())
+        fs_sleep_l.addWidget(self._switch_fs_prevent_sleep)
+        l.addWidget(card_fs_sleep)
+
         return page
 
     def _create_lyric_override_card(self) -> QWidget:
@@ -3103,6 +3125,8 @@ class SettingsDialog(QDialog):
         settings.set_opacity(self._slider_op.value() / 100.0)
         settings.set_offset_ms(self._spin_off.value())
         settings.set_fullscreen_context_lines(self._spin_fs_lines.value())
+        if hasattr(self, "_switch_fs_prevent_sleep"):
+            settings.set_fullscreen_prevent_sleep(self._switch_fs_prevent_sleep.isChecked())
 
         # 3. 歌曲独立偏移配置持久化到数据库
         if self._current_title and hasattr(self, "_chk_song_custom") and self._chk_song_custom is not None:
