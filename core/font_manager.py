@@ -283,9 +283,10 @@ def make_app_font(
     families: Optional[list[str]] = None,
 ) -> QFont:
     """构建 QFont 并应用生效的字体回退栈"""
+    safe_size = max(1, int(size)) if (size is not None and int(size) > 0) else 12
     f = QFont()
     f.setFamilies(families if families is not None else get_effective_font_families())
-    f.setPointSize(size)
+    f.setPointSize(safe_size)
     if weight is not None:
         f.setWeight(weight)
     else:

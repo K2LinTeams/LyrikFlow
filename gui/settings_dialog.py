@@ -1256,7 +1256,6 @@ class SettingsDialog(QDialog):
         lbl_preview.setStyleSheet(f"""
             QLabel#single_font_preview {{
                 font-family: "{item.family}";
-                font-size: 13px;
                 color: {'#1B1F24' if item.enabled else '#8C939E'};
                 background: transparent;
                 border: none;
@@ -2147,14 +2146,17 @@ class SettingsDialog(QDialog):
         active_families = [it.family for it in self._font_items if it.enabled and it.is_valid]
         mode = getattr(self, "_font_mode", "overlay")
         if mode == "fullscreen":
-            cur_sz = self._spin_fs_cur.value() if hasattr(self, "_spin_fs_cur") else settings.get_fullscreen_font_size_current()
-            sub_sz = max(12, int(cur_sz * 0.6))
+            raw_cur = self._spin_fs_cur.value() if hasattr(self, "_spin_fs_cur") else settings.get_fullscreen_font_size_current()
+            cur_sz = max(12, int(raw_cur))
+            sub_sz = max(10, int(cur_sz * 0.6))
             self._lbl_prev_cur.setFont(font_manager.make_app_font(cur_sz, bold=True, families=active_families))
             self._lbl_prev_roma.setFont(font_manager.make_app_font(sub_sz, bold=False, families=active_families))
             self._lbl_prev_trans.setFont(font_manager.make_app_font(sub_sz, bold=False, families=active_families))
         else:
-            cur_sz = self._spin_cur.value() if hasattr(self, "_spin_cur") else settings.get_font_size_current()
-            ctx_sz = self._spin_ctx.value() if hasattr(self, "_spin_ctx") else settings.get_font_size_context()
+            raw_cur = self._spin_cur.value() if hasattr(self, "_spin_cur") else settings.get_font_size_current()
+            raw_ctx = self._spin_ctx.value() if hasattr(self, "_spin_ctx") else settings.get_font_size_context()
+            cur_sz = max(12, int(raw_cur))
+            ctx_sz = max(10, int(raw_ctx))
             self._lbl_prev_cur.setFont(font_manager.make_app_font(cur_sz, bold=True, families=active_families))
             self._lbl_prev_roma.setFont(font_manager.make_app_font(ctx_sz, bold=False, families=active_families))
             self._lbl_prev_trans.setFont(font_manager.make_app_font(ctx_sz, bold=False, families=active_families))

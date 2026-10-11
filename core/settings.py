@@ -173,22 +173,46 @@ def get_opacity() -> float:
     return float(_get(["overlay", "opacity"], 0.85))
 
 def get_font_size_current() -> int:
-    return int(_get(["font", "size_current"], 28))
+    val = _get(["font", "size_current"], 28)
+    try:
+        val = int(val)
+        return val if val > 0 else 28
+    except Exception:
+        return 28
 
 def get_font_size_context() -> int:
-    return int(_get(["font", "size_context"], 14))
+    val = _get(["font", "size_context"], 14)
+    try:
+        val = int(val)
+        return val if val > 0 else 14
+    except Exception:
+        return 14
 
 def get_fullscreen_context_lines() -> int:
     """全屏模式下当前歌词上下各显示的上下文行数（默认 5 行）"""
-    return int(_get(["fullscreen", "context_lines"], 5))
+    val = _get(["fullscreen", "context_lines"], 5)
+    try:
+        return max(1, min(10, int(val)))
+    except Exception:
+        return 5
 
 def get_fullscreen_font_size_current() -> int:
     """全屏模式下当前行歌词字号（默认 38）"""
-    return int(_get(["fullscreen", "font_size_current"], 38))
+    val = _get(["fullscreen", "font_size_current"], 38)
+    try:
+        val = int(val)
+        return val if val > 0 else 38
+    except Exception:
+        return 38
 
 def get_fullscreen_font_size_context() -> int:
     """全屏模式下上下文歌词字号（默认 18）"""
-    return int(_get(["fullscreen", "font_size_context"], 18))
+    val = _get(["fullscreen", "font_size_context"], 18)
+    try:
+        val = int(val)
+        return val if val > 0 else 18
+    except Exception:
+        return 18
 
 def get_fullscreen_context_secondary_mode() -> str:
     """全屏非当前行副行显示内容"""
