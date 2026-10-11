@@ -83,11 +83,11 @@ class SMTCListener(QThread):
 
     async def _main_loop(self) -> None:
         try:
-            from winsdk.windows.media.control import (
+            from winrt.windows.media.control import (
                 GlobalSystemMediaTransportControlsSessionManager as MediaManager,
             )
         except ImportError:
-            from winrt.windows.media.control import (
+            from winsdk.windows.media.control import (
                 GlobalSystemMediaTransportControlsSessionManager as MediaManager,
             )
 
@@ -552,11 +552,11 @@ class SMTCListener(QThread):
     async def _fetch_thumbnail(props) -> bytes:
         try:
             try:
-                from winsdk.windows.storage.streams import (
+                from winrt.windows.storage.streams import (
                     Buffer, DataReader, InputStreamOptions,
                 )
             except ImportError:
-                from winrt.windows.storage.streams import (
+                from winsdk.windows.storage.streams import (
                     Buffer, DataReader, InputStreamOptions,
                 )
 

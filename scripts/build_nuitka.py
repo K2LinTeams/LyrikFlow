@@ -114,10 +114,7 @@ def run_nuitka(clean: bool = False) -> str:
     if icon_path and os.path.exists(icon_path):
         cmd.append(f"--windows-icon-from-ico={icon_path}")
 
-    if sys.version_info < (3, 13):
-        cmd.append("--include-package=winsdk")
-    else:
-        cmd.append("--include-package=winrt")
+    cmd.append("--include-package=winrt")
 
     cmd.append(main_script)
 
