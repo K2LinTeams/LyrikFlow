@@ -56,17 +56,14 @@ class SMTCListener(QThread):
 
     # ── 公共接口 ─────────────────────────────────────────────────────────────
     def set_offset(self, offset_ms: int) -> None:
-        """设置时间偏移（毫秒）"""
         with self._state_lock:
             self._offset_ms = int(offset_ms)
 
     def get_offset(self) -> int:
-        """获取当前时间偏移（毫秒）"""
         with self._state_lock:
             return self._offset_ms
 
     def adjust_offset(self, delta_ms: int) -> None:
-        """调整时间偏移（毫秒）"""
         with self._state_lock:
             self._offset_ms += delta_ms
 
@@ -154,7 +151,6 @@ class SMTCListener(QThread):
         return any(w in name for w in watched_lower)
 
     def _pick_session(self, manager):
-        """挑选目标媒体会话"""
         try:
             current = manager.get_current_session()
             if current and self._is_target(current.source_app_user_model_id):
@@ -185,7 +181,6 @@ class SMTCListener(QThread):
         return end_s > 0.0
 
     def _detach_current_session(self) -> None:
-        """注销当前会话的事件回调"""
         with self._state_lock:
             self._pending_play_baseline = False
         s = self._current_session
@@ -214,7 +209,6 @@ class SMTCListener(QThread):
         self._current_session = None
 
     def _attach_session(self, session, now: float) -> None:
-        """挂载新会话并注册原生 SMTC 事件"""
         self._detach_current_session()
         if not session:
             with self._state_lock:
@@ -447,7 +441,6 @@ class SMTCListener(QThread):
                 self.song_changed.emit(title, artist, thumb_bytes)
 
     def _sync_timeline(self, session, is_playing: bool, song_just_changed: bool = False) -> None:
-        """同步时间轴状态并校准时钟基准"""
         now_mono = time.monotonic()
         tl = None
         try:

@@ -29,7 +29,6 @@ def get_shared_session() -> requests.Session:
 
 @dataclass
 class SearchSongItem:
-    """搜索匹配到的单曲元信息"""
     song_id: str                      # 平台歌曲唯一 ID
     title: str                        # 歌名
     artist: str                       # 歌手
@@ -70,7 +69,6 @@ class SearchSongItem:
 
 @dataclass
 class RawLyricResult:
-    """提供源获取到的原始歌词文本与素材包"""
     provider: str
     song_id: str
     title: str
@@ -87,23 +85,18 @@ class RawLyricResult:
 
 
 class BaseLyricProvider:
-    """歌词提供源基础抽象类"""
 
     provider_name: str = "base"
 
     def search_song(self, title: str, artist: str) -> Optional[SearchSongItem]:
-        """根据歌名和歌手搜索最匹配的歌曲"""
         raise NotImplementedError
 
     def search_songs(self, title: str, artist: str = "", limit: int = 15) -> list[SearchSongItem]:
-        """搜索歌曲候选列表（默认调用 search_song 兜底）"""
         item = self.search_song(title, artist)
         return [item] if item else []
 
     def get_lyrics(self, song_item: SearchSongItem) -> Optional[RawLyricResult]:
-        """根据歌曲信息获取歌词与素材"""
         raise NotImplementedError
 
     def download_cover(self, pic_url: str) -> Optional[bytes]:
-        """下载高清封面二进制"""
         return None

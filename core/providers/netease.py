@@ -27,7 +27,6 @@ NETEASE_HEADERS = {
 
 
 def eapi_encrypt(url: str, data: dict) -> str:
-    """网易云 EAPI AES-128-ECB 请求体加密与签名"""
     text = json.dumps(data)
     message = f"nobody{url}use{text}md5forencrypt"
     digest = hashlib.md5(message.encode("utf-8")).hexdigest()

@@ -102,7 +102,6 @@ class QQMusicLyricProvider(BaseLyricProvider):
         return variants
 
     def _execute_search_raw(self, query: str, limit: int = 15) -> list[dict]:
-        """按优先级轮询客户端配置执行检索"""
         for comm in QQ_COMM_CONFIGS:
             search_body = {
                 "comm": comm,
@@ -153,7 +152,6 @@ class QQMusicLyricProvider(BaseLyricProvider):
         artist: str,
         extra_artists: Optional[list[str]] = None,
     ) -> tuple[Optional[SearchSongItem], Optional[RawLyricResult]]:
-        """搜索歌曲并返回 (item, 探测到的歌词)，避免上层重复拉取。"""
         t_strip = title.strip()
         if t_strip.isdigit() and len(t_strip) >= 4:
             direct_item = SearchSongItem(
@@ -237,7 +235,6 @@ class QQMusicLyricProvider(BaseLyricProvider):
             return s
 
         def safe_artist_match(t_art: str, c_art: str) -> bool:
-            """安全歌手匹配，避免如 'kz' 子串盲目命中 'kztandingan'"""
             if not t_art or not c_art:
                 return False
             if t_art == c_art:

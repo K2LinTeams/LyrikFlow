@@ -24,7 +24,6 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def ensure_icon() -> str:
-    """Ensure assets/icon.ico exists, generating it if necessary."""
     assets_dir = os.path.join(PROJECT_ROOT, "assets")
     os.makedirs(assets_dir, exist_ok=True)
     icon_path = os.path.join(assets_dir, "icon.ico")
@@ -136,7 +135,6 @@ def run_nuitka(clean: bool = False) -> str:
 
 
 def create_zip(exe_path: str, zip_path: str) -> None:
-    """Create zip package containing the standalone executable and config example."""
     print(f"[Build] Creating ZIP package: {zip_path} ...")
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         zf.write(exe_path, "LyrikFlow.exe")

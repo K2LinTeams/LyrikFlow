@@ -39,7 +39,6 @@ _lock = threading.Lock()
 
 
 def _prune_db_cache(cursor: sqlite3.Cursor) -> None:
-    """保持 SQLite 歌词缓存条数上限，按最近访问时间 LRU 淘汰最旧数据"""
     try:
         cursor.execute("SELECT COUNT(*) FROM song_cache;")
         row = cursor.fetchone()
@@ -58,14 +57,12 @@ def _prune_db_cache(cursor: sqlite3.Cursor) -> None:
 
 
 def _compress_lyrics(json_str: str) -> bytes:
-    """使用 zlib 极速压缩 JSON 歌词字符串 (级别 6)"""
     if not json_str:
         return b""
     return zlib.compress(json_str.encode("utf-8"), level=6)
 
 
 def _decompress_lyrics(raw_data: Any) -> str:
-    """使用 zlib 解压二进制歌词"""
     if not raw_data:
         return ""
     if isinstance(raw_data, bytes):
@@ -85,7 +82,6 @@ def _get_connection() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """初始化数据库表与索引"""
     with _lock:
         conn = _get_connection()
         try:
@@ -136,12 +132,10 @@ def _normalize_key_str(s: str) -> str:
 
 
 def make_track_key(title: str, artist: str) -> str:
-    """归一化歌曲唯一检索键（统一弯引号等符号）"""
     return f"{_normalize_key_str(title)}|||{_normalize_key_str(artist)}"
 
 
 def get_song_cache(title: str, artist: str) -> Optional[dict[str, Any]]:
-    """从 SQLite 查询已缓存的结构化歌词与封面"""
     key = make_track_key(title, artist)
     raw_key = f"{title.lower().strip()}|||{artist.lower().strip()}"
     curly_key = raw_key.replace("'", "’")
@@ -202,7 +196,6 @@ def save_song_cache(
     provider: Optional[str] = None,
     song_id: Optional[str] = None,
 ) -> None:
-    """持久化保存结构化 JSON 歌词数据（zlib 压缩）与专辑封面"""
     if parsed is None or (not parsed.lines and not parsed.is_instrumental):
         return
 
@@ -249,7 +242,6 @@ def save_song_cache(
 
 
 def update_song_offset(title: str, artist: str = "", offset_ms: int = 0) -> bool:
-    """更新 SQLite 缓存中指定歌曲的歌词偏移量"""
     if not title:
         return False
     key = make_track_key(title, artist)
@@ -283,7 +275,6 @@ def update_song_offset(title: str, artist: str = "", offset_ms: int = 0) -> bool
 
 
 def delete_song_cache(title: str, artist: str = "") -> bool:
-    """删除 SQLite 缓存中指定歌曲的记录"""
     if not title:
         return False
     key = make_track_key(title, artist)
@@ -301,7 +292,6 @@ def delete_song_cache(title: str, artist: str = "") -> bool:
 
 
 def get_song_offset(title: str, artist: str = "") -> Optional[int]:
-    """从 SQLite 数据库获取指定歌曲的独立偏移量（毫秒），未单独配置时返回 None"""
     if not title:
         return None
     key = make_track_key(title, artist)
@@ -328,7 +318,6 @@ def get_song_offset(title: str, artist: str = "") -> Optional[int]:
 
 
 def get_all_song_offsets() -> dict[str, int]:
-    """从 SQLite 数据库获取所有单独配置的歌曲独立偏移量字典 {song_key: offset_ms}"""
     with _lock:
         conn = _get_connection()
         try:
@@ -344,7 +333,6 @@ def get_all_song_offsets() -> dict[str, int]:
 
 
 def set_song_offset(title: str, artist: str = "", offset_ms: int = 0) -> None:
-    """持久化保存单首歌曲的独立偏移量至 SQLite 数据库"""
     if not title:
         return
     key = make_track_key(title, artist)
@@ -375,7 +363,6 @@ def set_song_offset(title: str, artist: str = "", offset_ms: int = 0) -> None:
 
 
 def remove_song_offset(title: str, artist: str = "") -> None:
-    """从 SQLite 数据库移除单首歌曲的独立偏移量配置"""
     if not title:
         return
     key = make_track_key(title, artist)
@@ -400,7 +387,6 @@ def remove_song_offset(title: str, artist: str = "") -> None:
 
 
 def set_all_song_offsets(offsets: dict[str, int]) -> None:
-    """全量更新 SQLite 数据库中的歌曲独立偏移量配置"""
     with _lock:
         conn = _get_connection()
         try:

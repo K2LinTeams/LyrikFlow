@@ -116,9 +116,6 @@ def _fast_qrc_decrypt(cipher_bytes: bytes) -> bytes:
 
 
 def decrypt_qrc(hex_str: str) -> str:
-    """
-    解密 QQ 音乐 QRC Hex 密文
-    """
     cleaned = hex_str.strip()
     if not cleaned:
         return ""
@@ -129,9 +126,6 @@ def decrypt_qrc(hex_str: str) -> str:
 
 
 def extract_qrc_payload(text_or_hex: str) -> str:
-    """
-    从歌词节点内容中安全解密并提取纯净 QRC 歌词文本
-    """
     if not text_or_hex:
         return ""
 

@@ -62,10 +62,6 @@ def fetch_lyrics_multi(
     on_cover: Optional[Callable[[str, str, bytes], None]] = None,
     is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> tuple[Optional[ParsedLyrics], Optional[bytes], str]:
-    """
-    多源获取歌词与元信息流水线。
-    返回: (parsed_lyrics, hd_cover_bytes, sub_name)
-    """
     cache_key = f"{title.lower().strip()}|||{artist.lower().strip()}"
     cached_result = _get_from_mem_cache(cache_key)
     if cached_result is not None:
@@ -376,7 +372,6 @@ def fetch_and_apply_override(
     on_sub_name: Optional[Callable[[str, str, str], None]] = None,
     on_cover: Optional[Callable[[str, str, bytes], None]] = None,
 ) -> tuple[Optional[ParsedLyrics], Optional[bytes], str]:
-    """手动指定特定歌曲项并解析、持久化覆盖当前歌曲"""
     if on_progress:
         on_progress(0.2)
 
@@ -443,7 +438,6 @@ def fetch_and_apply_override(
 
 
 def clear_song_cache(title: str, artist: str = "") -> None:
-    """清除当前歌曲的数据库本地缓存与内存缓存"""
     db_cache.delete_song_cache(title, artist)
     cache_key = f"{title.lower().strip()}|||{artist.lower().strip()}"
     _remove_from_mem_cache(cache_key)
@@ -455,7 +449,6 @@ def search_all_sources(
     provider_filter: str = "all",
     limit: int = 15
 ) -> list[SearchSongItem]:
-    """聚合搜索"""
     prov = (provider_filter or "all").lower().strip()
     if prov != "all":
         if prov == "netease":

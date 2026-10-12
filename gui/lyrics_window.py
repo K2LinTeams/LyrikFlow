@@ -290,7 +290,6 @@ class LyricsWindow(QObject):
 
     # ── 设置对话框 ───────────────────────────────────────────────────────────
     def preview_offset(self, offset_ms: int) -> None:
-        """设置对话框实时微调预览偏移量"""
         self.smtc.set_offset(offset_ms)
         if not self._lyrics:
             return
@@ -329,7 +328,6 @@ class LyricsWindow(QObject):
             self.preview_offset(initial_offset)
 
     def _reload_current_song_lyrics(self) -> None:
-        """设置更新后重新解析当前歌曲歌词并即时推送到界面"""
         if not self._current_title:
             return
         effective_offset = settings.get_effective_song_offset(self._current_title, self._current_artist)

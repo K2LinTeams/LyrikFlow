@@ -328,10 +328,8 @@ PRESET_THEMES: dict[str, dict[str, Any]] = {
 
 
 def get_preset(preset_key: str) -> dict[str, Any]:
-    """获取指定预设，若不存在则回退至经典默认"""
     return PRESET_THEMES.get(preset_key, PRESET_THEMES["classic"])
 
 
 def get_default_colors() -> dict[str, str]:
-    """获取经典默认配色字典"""
     return dict(PRESET_THEMES["classic"]["colors"])

@@ -33,11 +33,6 @@ class SleepInhibitor:
         return self._is_active
 
     def set_stay_awake(self, enable: bool) -> bool:
-        """设置是否阻止熄屏和系统睡眠。
-
-        :param enable: True 为保持常亮防熄屏，False 为恢复系统电源计划。
-        :return: 操作是否成功
-        """
         if not self._is_windows or self._set_thread_execution_state is None:
             return False
 
@@ -65,7 +60,6 @@ class SleepInhibitor:
             return False
 
     def cleanup(self) -> None:
-        """应用退出时安全重置电源状态"""
         self.set_stay_awake(False)
 
 

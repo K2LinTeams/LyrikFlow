@@ -8,7 +8,7 @@ import math
 from typing import Optional
 
 from PyQt6.QtCore import (
-    Qt, QTimer, QRectF,
+    Qt, QTimer, QRectF, QPointF,
 )
 from PyQt6.QtGui import (
     QColor, QPainter, QFont, QFontMetrics, QPixmap,
@@ -28,6 +28,17 @@ except ImportError:
     import font_manager
     from lyrics_parser import ParsedLyrics
 
+try:
+    from gui.lyric_scroll import (
+        LyricScrollTracker, compute_focus_offset,
+        compute_secondary_x, apply_edge_feather_mask, LayerBufferCache,
+    )
+except ImportError:
+    from lyric_scroll import (
+        LyricScrollTracker, compute_focus_offset,
+        compute_secondary_x, apply_edge_feather_mask, LayerBufferCache,
+    )
+
 
 # ── 颜色常量 ─────────────────────────────────────────────────────────────────
 COLOR_CUR       = QColor(255, 255, 255, 255)
@@ -35,6 +46,8 @@ COLOR_NEXT      = QColor(255, 255, 255, 175)
 COLOR_FAR       = QColor(255, 255, 255, 80)
 COLOR_TRANS_CUR = QColor(195, 225, 255, 215)
 COLOR_TRANS_CTX = QColor(195, 225, 255, 95)
+HORIZ_FADE_MARGIN  = 96.0   # 左右两端虚化渐变遮罩宽度
+HORIZ_SIDE_PADDING = 80.0   # 视口安全边距
 
 
 def _make_font(size: int, bold: bool = False) -> QFont:
@@ -43,7 +56,6 @@ def _make_font(size: int, bold: bool = False) -> QFont:
 
 # ── 歌词滚动画布 ──────────────────────────────────────────────────────────────
 class LyricsCanvas(QWidget):
-    """绘制歌词列表，支持 60FPS 平滑流动滚动与逐字/非逐字进度渲染"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -55,6 +67,8 @@ class LyricsCanvas(QWidget):
         self._is_verbatim_song: bool = False
         self._scroll_offset: float = 0.0      # 当前绘制偏移
         self._target_offset: float = 0.0
+        self._scroll_tracker = LyricScrollTracker(damping=0.10, golden_ratio=0.42)
+        self._line_cache = LayerBufferCache()
         self._show_translation = settings.get_show_translation()
         self._show_romaji = settings.get_show_romaji()
         self._context_secondary_mode = settings.get_fullscreen_context_secondary_mode()
@@ -81,6 +95,7 @@ class LyricsCanvas(QWidget):
 
         # 60FPS 连续渲染与缓动滚动驱动计时器
         self._anim_timer = QTimer(self)
+        self._anim_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._anim_timer.setInterval(16)  # ~60fps
         self._anim_timer.timeout.connect(self._on_anim_tick)
         self._anim_timer.start()
@@ -114,6 +129,7 @@ class LyricsCanvas(QWidget):
         self._fm_far = QFontMetrics(self._font_far)
         self._fm_trans_cur = QFontMetrics(self._font_trans_cur)
         self._fm_trans_ctx = QFontMetrics(self._font_trans_ctx)
+        self._line_cache.invalidate()
         if self._cur_index >= 0:
             self._target_offset = self._calc_offset_for(self._cur_index)
         self.update()
@@ -132,7 +148,10 @@ class LyricsCanvas(QWidget):
         else:
             self._scroll_offset = self._target_offset
 
-        if self._is_playing or is_moving:
+        # 超长单句横向平滑相机跟随插值
+        is_h_moving = self._scroll_tracker.tick()
+
+        if self._is_playing or is_moving or is_h_moving:
             self.update()
 
     def set_lyrics(self, lyrics: Optional[ParsedLyrics]):
@@ -144,6 +163,8 @@ class LyricsCanvas(QWidget):
         self._cur_index = -1
         self._target_offset = self._calc_offset_for(0)
         self._scroll_offset = self._target_offset
+        self._scroll_tracker.reset()
+        self._line_cache.invalidate()
         self.update()
 
     def set_current_time(self, elapsed_ms: int, idx: int):
@@ -153,7 +174,7 @@ class LyricsCanvas(QWidget):
             prev_idx = self._cur_index
             self._cur_index = idx
             self._target_offset = self._calc_offset_for(idx)
-            # 若初次进入歌词，立即对齐居中，避免从 0 产生漫长滑行跳动
+            self._scroll_tracker.reset()
             if prev_idx < 0:
                 self._scroll_offset = self._target_offset
         self.update()
@@ -164,6 +185,7 @@ class LyricsCanvas(QWidget):
         prev_idx = self._cur_index
         self._cur_index = idx
         self._target_offset = self._calc_offset_for(idx)
+        self._scroll_tracker.reset()
         if prev_idx < 0:
             self._scroll_offset = self._target_offset
         self.update()
@@ -203,7 +225,6 @@ class LyricsCanvas(QWidget):
             self._target_offset = self._calc_offset_for(self._cur_index)
 
     def _get_line_flags(self, line, dist: int) -> tuple[bool, bool, bool]:
-        """计算指定距离行的副行显示标记: (has_ro, has_tr, has_sec)"""
         if dist == 0:
             has_ro = bool(self._show_romaji and line.romaji.strip())
             has_tr = bool(self._show_translation and line.translation.strip())
@@ -229,13 +250,12 @@ class LyricsCanvas(QWidget):
         return has_ro, has_tr, has_sec
 
     def _calc_offset_for(self, idx: int) -> float:
-        """计算让第 idx 行在全屏视口中自然居中的偏移量"""
         if not self._lyrics or not self._lyrics.lines:
             return 0.0
         target_idx = max(0, min(len(self._lyrics.lines) - 1, idx if idx >= 0 else 0))
         y = 0.0
         for i, line in enumerate(self._lyrics.lines):
-            fnt, has_t = self._line_meta(i, target_idx)
+            _, _, has_t = self._line_meta(i, target_idx)
             lh = self._line_height(i, target_idx, has_t)
             if i == target_idx:
                 has_ro, has_tr, has_sec = self._get_line_flags(line, 0)
@@ -256,18 +276,21 @@ class LyricsCanvas(QWidget):
             y += lh
         return 0.0
 
-    def _line_meta(self, i: int, cur: int) -> tuple[QFont, bool]:
+    def _line_meta(self, i: int, cur: int) -> tuple[QFont, QFontMetrics, bool]:
         dist = abs(i - cur)
         if dist == 0:
             fnt = self._font_cur
+            fm = self._fm_cur
         elif dist == 1:
             fnt = self._font_near
+            fm = self._fm_near
         else:
             fnt = self._font_far
+            fm = self._fm_far
         line = self._lyrics.lines[i]
         has_ro, has_tr, has_sec = self._get_line_flags(line, dist)
         has_t = has_ro or has_tr or has_sec
-        return fnt, has_t
+        return fnt, fm, has_t
 
     def _line_height(self, i: int, cur: int, has_t: bool) -> float:
         dist = abs(i - cur)
@@ -295,6 +318,134 @@ class LyricsCanvas(QWidget):
 
         return base + 24   # 行间距
 
+    def _draw_current_active_line(
+        self,
+        p: QPainter,
+        w: int,
+        draw_y: float,
+        fm: QFontMetrics,
+        tfm: QFontMetrics,
+        line,
+        live_ms: float,
+        final_alpha: int,
+        fade_factor: float,
+        start_x: float,
+        main_w: float,
+        view_w: float,
+        max_scroll: float,
+        word_widths: Optional[list[float]] = None,
+        ro_w: float = 0.0,
+        tr_w: float = 0.0,
+    ) -> None:
+        p.setFont(self._font_cur)
+        main_text = line.text.strip()
+        c_act = self._color_act
+        c_inact = self._color_inact
+        c_sec = self._color_sec
+
+        # ── 1. 主行歌词绘制 ──
+        if self._is_verbatim_song:
+            if line.words:
+                curr_x = start_x
+                for idx, wd in enumerate(line.words):
+                    ww = word_widths[idx] if (word_widths is not None and idx < len(word_widths)) else float(fm.horizontalAdvance(wd.text))
+                    w_start = wd.time_ms
+                    w_dur = max(1, wd.duration_ms)
+                    w_end = w_start + w_dur
+
+                    if live_ms < w_start:
+                        p.setPen(QColor(c_inact.red(), c_inact.green(), c_inact.blue(), final_alpha))
+                        p.drawText(QPointF(curr_x, draw_y + fm.ascent()), wd.text)
+                    elif live_ms >= w_end:
+                        p.setPen(QColor(c_act.red(), c_act.green(), c_act.blue(), final_alpha))
+                        p.drawText(QPointF(curr_x, draw_y + fm.ascent()), wd.text)
+                    else:
+                        progress = min(1.0, max(0.0, (live_ms - w_start) / float(w_dur)))
+                        wipe = QLinearGradient(curr_x, 0, curr_x + ww, 0)
+                        col_full = QColor(c_act.red(), c_act.green(), c_act.blue(), final_alpha)
+                        col_fade = QColor(c_inact.red(), c_inact.green(), c_inact.blue(), final_alpha)
+                        wipe.setColorAt(0.0, col_full)
+                        wipe.setColorAt(progress, col_full)
+                        wipe.setColorAt(min(1.0, progress + 0.08), col_fade)
+                        wipe.setColorAt(1.0, col_fade)
+                        p.setPen(QPen(QBrush(wipe), 0))
+                        p.drawText(QPointF(curr_x, draw_y + fm.ascent()), wd.text)
+                    curr_x += ww
+            else:
+                curr_x = start_x
+                dur = max(1000, line.duration_ms)
+                progress = min(1.0, max(0.0, (live_ms - line.time_ms) / float(dur)))
+                wipe = QLinearGradient(curr_x, 0, curr_x + main_w, 0)
+                col_full = QColor(c_act.red(), c_act.green(), c_act.blue(), final_alpha)
+                col_fade = QColor(c_inact.red(), c_inact.green(), c_inact.blue(), final_alpha)
+                wipe.setColorAt(0.0, col_full)
+                wipe.setColorAt(progress, col_full)
+                wipe.setColorAt(min(1.0, progress + 0.08), col_fade)
+                wipe.setColorAt(1.0, col_fade)
+                p.setPen(QPen(QBrush(wipe), 0))
+                p.drawText(QPointF(curr_x, draw_y + fm.ascent()), main_text)
+        else:
+            p.setPen(QColor(c_act.red(), c_act.green(), c_act.blue(), final_alpha))
+            p.drawText(QPointF(start_x, draw_y + fm.ascent()), main_text)
+
+        # ── 2. 副行（罗马音 / 译文 / 声部）绘制 ──
+        has_ro, has_tr, has_sec = self._get_line_flags(line, 0)
+        p.setFont(self._font_trans_cur)
+        sub_y = draw_y + fm.height() + 8
+
+        if has_ro:
+            ro_text = line.romaji.strip()
+            ttx = compute_secondary_x(
+                sub_text=ro_text,
+                fm_sub=tfm,
+                w=w,
+                view_w=view_w,
+                side_margin=HORIZ_SIDE_PADDING,
+                max_scroll=max_scroll,
+                scroll_x=self._scroll_tracker.scroll_x,
+                sub_w=ro_w,
+            )
+            ro_alpha = int(200 * fade_factor)
+            if ro_alpha > 2:
+                p.setPen(QColor(c_sec.red(), c_sec.green(), c_sec.blue(), ro_alpha))
+                p.drawText(QPointF(ttx, sub_y + tfm.ascent()), ro_text)
+            sub_y += tfm.height() + 6
+
+        if has_tr:
+            tr_text = line.translation.strip()
+            ttx = compute_secondary_x(
+                sub_text=tr_text,
+                fm_sub=tfm,
+                w=w,
+                view_w=view_w,
+                side_margin=HORIZ_SIDE_PADDING,
+                max_scroll=max_scroll,
+                scroll_x=self._scroll_tracker.scroll_x,
+                sub_w=tr_w,
+            )
+            t_alpha = int(215 * fade_factor)
+            if t_alpha > 2:
+                p.setPen(QColor(c_sec.red(), c_sec.green(), c_sec.blue(), t_alpha))
+                p.drawText(QPointF(ttx, sub_y + tfm.ascent()), tr_text)
+            sub_y += tfm.height() + 6
+
+        if not (has_ro or has_tr) and has_sec:
+            sec_text = line.get_secondary_text(False, False, parse_sections=True)
+            if sec_text:
+                ttx = compute_secondary_x(
+                    sub_text=sec_text,
+                    fm_sub=tfm,
+                    w=w,
+                    view_w=view_w,
+                    side_margin=HORIZ_SIDE_PADDING,
+                    max_scroll=max_scroll,
+                    scroll_x=self._scroll_tracker.scroll_x,
+                )
+                sec_alpha = int(200 * fade_factor)
+                if sec_alpha > 2:
+                    p.setPen(QColor(c_sec.red(), c_sec.green(), c_sec.blue(), sec_alpha))
+                    p.drawText(QPointF(ttx, sub_y + tfm.ascent()), sec_text)
+
     def paintEvent(self, event):
         if not self._lyrics:
             return
@@ -314,7 +465,7 @@ class LyricsCanvas(QWidget):
         lines = self._lyrics.lines
 
         for i, line in enumerate(lines):
-            fnt, has_t = self._line_meta(i, cur)
+            fnt, fm, has_t = self._line_meta(i, cur)
             lh = self._line_height(i, cur, has_t)
 
             # 剔除视口外不可见行
@@ -355,113 +506,129 @@ class LyricsCanvas(QWidget):
 
             # 主文本绘制
             painter.setFont(fnt)
-            fm = QFontMetrics(fnt)
             main_text = line.text.strip()
-            c_act = self._color_act
             c_inact = self._color_inact
             c_sec = self._color_sec
 
             if dist == 0:
-                if self._is_verbatim_song:
-                    if line.words:
-                        total_w = sum(fm.horizontalAdvance(wd.text) for wd in line.words)
-                        curr_x = (w - total_w) / 2.0
-                        for wd in line.words:
-                            ww = fm.horizontalAdvance(wd.text)
-                            w_start = wd.time_ms
-                            w_dur = max(1, wd.duration_ms)
-                            w_end = w_start + w_dur
+                tfm = self._fm_trans_cur
+                view_w = max(100.0, float(w) - HORIZ_SIDE_PADDING * 2.0)
 
-                            if live_ms < w_start:
-                                painter.setPen(QColor(c_inact.red(), c_inact.green(), c_inact.blue(), final_alpha))
-                                painter.drawText(int(curr_x), int(y + fm.ascent()), wd.text)
-                            elif live_ms >= w_end:
-                                painter.setPen(QColor(c_act.red(), c_act.green(), c_act.blue(), final_alpha))
-                                painter.drawText(int(curr_x), int(y + fm.ascent()), wd.text)
-                            else:
-                                progress = min(1.0, max(0.0, (live_ms - w_start) / float(w_dur)))
-                                wipe = QLinearGradient(curr_x, 0, curr_x + ww, 0)
-                                col_full = QColor(c_act.red(), c_act.green(), c_act.blue(), final_alpha)
-                                col_fade = QColor(c_inact.red(), c_inact.green(), c_inact.blue(), final_alpha)
-                                wipe.setColorAt(0.0, col_full)
-                                wipe.setColorAt(progress, col_full)
-                                wipe.setColorAt(min(1.0, progress + 0.08), col_fade)
-                                wipe.setColorAt(1.0, col_fade)
-                                painter.setPen(QPen(QBrush(wipe), 0))
-                                painter.drawText(int(curr_x), int(y + fm.ascent()), wd.text)
-                            curr_x += ww
-                    else:
-                        total_w = fm.horizontalAdvance(main_text)
-                        curr_x = (w - total_w) / 2.0
-                        dur = max(1000, line.duration_ms)
-                        progress = min(1.0, max(0.0, (live_ms - line.time_ms) / float(dur)))
-                        wipe = QLinearGradient(curr_x, 0, curr_x + total_w, 0)
-                        col_full = QColor(c_act.red(), c_act.green(), c_act.blue(), final_alpha)
-                        col_fade = QColor(c_inact.red(), c_inact.green(), c_inact.blue(), final_alpha)
-                        wipe.setColorAt(0.0, col_full)
-                        wipe.setColorAt(progress, col_full)
-                        wipe.setColorAt(min(1.0, progress + 0.08), col_fade)
-                        wipe.setColorAt(1.0, col_fade)
-                        painter.setPen(QPen(QBrush(wipe), 0))
-                        painter.drawText(int(curr_x), int(y + fm.ascent()), main_text)
+                # 计算当前行总宽度与演唱焦点
+                if self._is_verbatim_song and line.words:
+                    word_widths = [float(fm.horizontalAdvance(wd.text)) for wd in line.words]
+                    main_w = float(sum(word_widths))
                 else:
-                    elided = fm.elidedText(main_text, Qt.TextElideMode.ElideRight, w - 80)
-                    tx = (w - fm.horizontalAdvance(elided)) // 2
-                    painter.setPen(QColor(c_act.red(), c_act.green(), c_act.blue(), final_alpha))
-                    painter.drawText(tx, int(y + fm.ascent()), elided)
+                    word_widths = None
+                    main_w = float(fm.horizontalAdvance(main_text))
+
+                focus_offset = compute_focus_offset(
+                    words=line.words,
+                    main_text=main_text,
+                    line_time_ms=line.time_ms,
+                    line_dur_ms=line.duration_ms,
+                    live_ms=live_ms,
+                    fm=fm,
+                    is_verbatim=self._is_verbatim_song,
+                    word_widths=word_widths,
+                )
+
+                target_scroll, max_scroll = self._scroll_tracker.update_target(main_w, view_w, focus_offset)
+
+                has_ro, has_tr, _ = self._get_line_flags(line, 0)
+                sub_overflow = False
+                ro_w = float(tfm.horizontalAdvance(line.romaji.strip())) if has_ro else 0.0
+                tr_w = float(tfm.horizontalAdvance(line.translation.strip())) if has_tr else 0.0
+                if has_ro and ro_w > view_w:
+                    sub_overflow = True
+                if has_tr and tr_w > view_w:
+                    sub_overflow = True
+
+                if main_w > view_w:
+                    start_x = HORIZ_SIDE_PADDING - self._scroll_tracker.scroll_x
+                    needs_feather = True
+                else:
+                    start_x = (w - main_w) / 2.0
+                    needs_feather = sub_overflow or (self._scroll_tracker.scroll_x > 0.5)
+
+                if needs_feather:
+                    dpr = self.devicePixelRatioF()
+                    line_w = int(w)
+                    line_h = int(math.ceil(lh)) + 4
+                    layer_img = self._line_cache.get(line_w, line_h, dpr)
+
+                    lp = QPainter(layer_img)
+                    lp.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                    lp.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+
+                    self._draw_current_active_line(
+                        lp, w, 0.0, fm, tfm, line, live_ms, final_alpha, fade_factor,
+                        start_x, main_w, view_w, max_scroll,
+                        word_widths=word_widths, ro_w=ro_w, tr_w=tr_w,
+                    )
+
+                    apply_edge_feather_mask(lp, line_w, line_h, HORIZ_FADE_MARGIN)
+                    lp.end()
+
+                    painter.drawImage(QPointF(0.0, y), layer_img)
+                else:
+                    self._draw_current_active_line(
+                        painter, w, y, fm, tfm, line, live_ms, final_alpha, fade_factor,
+                        start_x, main_w, view_w, max_scroll,
+                        word_widths=word_widths, ro_w=ro_w, tr_w=tr_w,
+                    )
             else:
+                # ── 非当前行（上下文背景行）绘制 ──
                 elided = fm.elidedText(main_text, Qt.TextElideMode.ElideRight, w - 80)
-                tx = (w - fm.horizontalAdvance(elided)) // 2
+                tx = (w - fm.horizontalAdvance(elided)) / 2.0
                 painter.setPen(QColor(c_inact.red(), c_inact.green(), c_inact.blue(), final_alpha))
-                painter.drawText(tx, int(y + fm.ascent()), elided)
+                painter.drawText(QPointF(tx, y + fm.ascent()), elided)
 
-            # ── 副行绘制 ──
-            has_ro, has_tr, has_sec = self._get_line_flags(line, dist)
-            tfnt = self._font_trans_cur if dist == 0 else self._font_trans_ctx
-            painter.setFont(tfnt)
-            tfm = QFontMetrics(tfnt)
-            sub_y = y + fm.height() + 8
+                # ── 副行绘制 ──
+                has_ro, has_tr, has_sec = self._get_line_flags(line, dist)
+                tfnt = self._font_trans_ctx
+                painter.setFont(tfnt)
+                tfm = self._fm_trans_ctx
+                sub_y = y + fm.height() + 8
 
-            if has_ro:
-                ro_text = line.romaji.strip()
-                te = tfm.elidedText(ro_text, Qt.TextElideMode.ElideRight, w - 80)
-                ttx = (w - tfm.horizontalAdvance(te)) // 2
-                base_ro_alpha = 200 if dist == 0 else 85
-                ro_alpha = int(base_ro_alpha * (base_alpha / 255.0) * fade_factor)
-                if ro_alpha > 2:
-                    painter.setPen(QColor(c_sec.red(), c_sec.green(), c_sec.blue(), ro_alpha))
-                    painter.drawText(ttx, int(sub_y + tfm.ascent()), te)
-                sub_y += tfm.height() + 6
+                if has_ro:
+                    ro_text = line.romaji.strip()
+                    te = tfm.elidedText(ro_text, Qt.TextElideMode.ElideRight, w - 80)
+                    ttx = (w - tfm.horizontalAdvance(te)) / 2.0
+                    base_ro_alpha = 85
+                    ro_alpha = int(base_ro_alpha * (base_alpha / 255.0) * fade_factor)
+                    if ro_alpha > 2:
+                        painter.setPen(QColor(c_sec.red(), c_sec.green(), c_sec.blue(), ro_alpha))
+                        painter.drawText(QPointF(ttx, sub_y + tfm.ascent()), te)
+                    sub_y += tfm.height() + 6
 
-            if has_tr:
-                # 绘制中文译文
-                tr_text = line.translation.strip()
-                te = tfm.elidedText(tr_text, Qt.TextElideMode.ElideRight, w - 80)
-                ttx = (w - tfm.horizontalAdvance(te)) // 2
-                base_t_alpha = 215 if dist == 0 else 95
-                t_alpha = int(base_t_alpha * (base_alpha / 255.0) * fade_factor)
-                if t_alpha > 2:
-                    painter.setPen(QColor(c_sec.red(), c_sec.green(), c_sec.blue(), t_alpha))
-                    painter.drawText(ttx, int(sub_y + tfm.ascent()), te)
-                sub_y += tfm.height() + 6
+                if has_tr:
+                    tr_text = line.translation.strip()
+                    te = tfm.elidedText(tr_text, Qt.TextElideMode.ElideRight, w - 80)
+                    ttx = (w - tfm.horizontalAdvance(te)) / 2.0
+                    base_t_alpha = 95
+                    t_alpha = int(base_t_alpha * (base_alpha / 255.0) * fade_factor)
+                    if t_alpha > 2:
+                        painter.setPen(QColor(c_sec.red(), c_sec.green(), c_sec.blue(), t_alpha))
+                        painter.drawText(QPointF(ttx, sub_y + tfm.ascent()), te)
+                    sub_y += tfm.height() + 6
 
-            if not (has_ro or has_tr) and has_sec:
-                sec_text = line.get_secondary_text(False, False, parse_sections=True)
-                if sec_text:
-                    te = tfm.elidedText(sec_text, Qt.TextElideMode.ElideRight, w - 80)
-                    ttx = (w - tfm.horizontalAdvance(te)) // 2
-                    base_sec_alpha = 200 if dist == 0 else 90
-                    sec_alpha = int(base_sec_alpha * (base_alpha / 255.0) * fade_factor)
-                    if sec_alpha > 2:
-                        painter.setPen(QColor(c_sec.red(), c_sec.green(), c_sec.blue(), sec_alpha))
-                        painter.drawText(ttx, int(sub_y + tfm.ascent()), te)
+                if not (has_ro or has_tr) and has_sec:
+                    sec_text = line.get_secondary_text(False, False, parse_sections=True)
+                    if sec_text:
+                        te = tfm.elidedText(sec_text, Qt.TextElideMode.ElideRight, w - 80)
+                        ttx = (w - tfm.horizontalAdvance(te)) / 2.0
+                        base_sec_alpha = 90
+                        sec_alpha = int(base_sec_alpha * (base_alpha / 255.0) * fade_factor)
+                        if sec_alpha > 2:
+                            painter.setPen(QColor(c_sec.red(), c_sec.green(), c_sec.blue(), sec_alpha))
+                            painter.drawText(QPointF(ttx, sub_y + tfm.ascent()), te)
 
             y += lh
 
 
 # ── 全画幅主窗口 ──────────────────────────────────────────────────────────────
 class FullscreenWidget(QWidget):
-    """全屏歌词视图"""
 
     def __init__(self, controller, parent=None):
         super().__init__(parent)
@@ -517,7 +684,6 @@ class FullscreenWidget(QWidget):
 
     # ── 高斯模糊全屏背景生成 ─────────────────────────────────────────────────
     def _generate_blurred_bg(self, pixmap: Optional[QPixmap]) -> Optional[QPixmap]:
-        """将封面图生成为超大半径、柔和且色彩饱满的高斯模糊全屏背景"""
         if not pixmap or pixmap.isNull():
             return None
 
@@ -568,7 +734,6 @@ class FullscreenWidget(QWidget):
             )
 
     def _update_background(self, pixmap: Optional[QPixmap]) -> None:
-        """更新背景模糊底图并触发平滑交叉淡入动画"""
         if pixmap and not pixmap.isNull():
             new_bg = self._generate_blurred_bg(pixmap)
             if new_bg:
@@ -589,7 +754,6 @@ class FullscreenWidget(QWidget):
 
     # ── 环境光晕色彩生成 ─────────────────────────────────────────────────────
     def _update_ambient_palette(self, thumb_pixmap: Optional[QPixmap]) -> None:
-        """从封面采样并生成温润、深邃的矢量环境光晕配色"""
         if not thumb_pixmap or thumb_pixmap.isNull():
             self._ambient_col_center = QColor(165, 145, 160)
             self._ambient_col_left   = QColor(135, 110, 115)
@@ -668,17 +832,14 @@ class FullscreenWidget(QWidget):
         self.update()
 
     def update_display_title(self, title: str):
-        """更新歌曲展示标题（如异步解析到副标题/别名）"""
         self._title = title.strip()
         self.update()
 
     def update_display_artist(self, artist: str):
-        """更新歌手行展示内容（如追加副标题/别名）"""
         self._artist = artist.strip()
         self.update()
 
     def update_song_info(self, title: str, artist: str):
-        """同步更新歌曲标题与歌手行展示内容"""
         self._title = title.strip()
         self._artist = artist.strip()
         self.update()
@@ -740,7 +901,6 @@ class FullscreenWidget(QWidget):
             self.update()
 
     def reset_loading_progress(self, keep_cover: bool = False) -> None:
-        """重置加载进度，开启圆环动画"""
         self._loading_progress = 0.0
         self._target_loading_progress = 0.10
         if not keep_cover:
@@ -750,7 +910,6 @@ class FullscreenWidget(QWidget):
         self.update()
 
     def set_target_loading_progress(self, val: float) -> None:
-        """设置平滑推进的目标进度 (0.0 ~ 1.0)"""
         self._target_loading_progress = max(0.0, min(1.0, float(val)))
 
     def set_playing(self, playing: bool):

@@ -83,9 +83,6 @@ def format_bytes(size_bytes: int) -> str:
 
 
 def scan_fonts() -> list[FontItem]:
-    """
-    自动扫描字体文件，载入 QFontDatabase
-    """
     global _CACHED_ITEMS, _LOADED_PATHS, _FILE_TO_FAMILIES
     candidate_dirs = get_candidate_font_dirs()
     if not candidate_dirs:
@@ -224,7 +221,6 @@ def scan_fonts() -> list[FontItem]:
 
 
 def get_font_items() -> list[FontItem]:
-    """获取当前字体列表"""
     global _CACHED_ITEMS
     if not _CACHED_ITEMS:
         return scan_fonts()
@@ -232,7 +228,6 @@ def get_font_items() -> list[FontItem]:
 
 
 def save_font_items(items: list[FontItem]) -> None:
-    """持久化字体优先级次序与启用配置"""
     global _CACHED_ITEMS
     _CACHED_ITEMS = list(items)
     data = [{"family": it.family, "enabled": it.enabled} for it in items]
@@ -240,9 +235,6 @@ def save_font_items(items: list[FontItem]) -> None:
 
 
 def get_effective_font_families() -> list[str]:
-    """
-    获取生效的字体族名回退列表
-    """
     items = get_font_items()
     active_local: list[str] = [
         it.family for it in items if it.enabled and it.is_valid
@@ -259,9 +251,6 @@ def get_effective_font_families() -> list[str]:
 
 
 def get_font_css_family(custom_items: Optional[list[FontItem]] = None) -> str:
-    """
-    计算适合用于 QSS / CSS 样式表的 font-family 字符串
-    """
     if custom_items is not None:
         active_local = [it.family for it in custom_items if it.enabled and it.is_valid]
         combined = active_local + SYSTEM_FALLBACK_FAMILIES
@@ -282,7 +271,6 @@ def make_app_font(
     weight: Optional[QFont.Weight] = None,
     families: Optional[list[str]] = None,
 ) -> QFont:
-    """构建 QFont 并应用生效的字体回退栈"""
     safe_size = max(1, int(size)) if (size is not None and int(size) > 0) else 12
     f = QFont()
     f.setFamilies(families if families is not None else get_effective_font_families())
@@ -296,7 +284,6 @@ def make_app_font(
 
 
 def open_fonts_folder() -> None:
-    """在文件资源管理器中打开 fonts 文件夹，方便用户拖入字体"""
     fdir = get_fonts_dir()
     try:
         if os.name == "nt":

@@ -190,7 +190,6 @@ def get_font_size_context() -> int:
         return 14
 
 def get_fullscreen_context_lines() -> int:
-    """全屏模式下当前歌词上下各显示的上下文行数（默认 5 行）"""
     val = _get(["fullscreen", "context_lines"], 5)
     try:
         return max(1, min(10, int(val)))
@@ -198,7 +197,6 @@ def get_fullscreen_context_lines() -> int:
         return 5
 
 def get_fullscreen_font_size_current() -> int:
-    """全屏模式下当前行歌词字号（默认 38）"""
     val = _get(["fullscreen", "font_size_current"], 38)
     try:
         val = int(val)
@@ -207,7 +205,6 @@ def get_fullscreen_font_size_current() -> int:
         return 38
 
 def get_fullscreen_font_size_context() -> int:
-    """全屏模式下上下文歌词字号（默认 18）"""
     val = _get(["fullscreen", "font_size_context"], 18)
     try:
         val = int(val)
@@ -216,11 +213,9 @@ def get_fullscreen_font_size_context() -> int:
         return 18
 
 def get_fullscreen_context_secondary_mode() -> str:
-    """全屏非当前行副行显示内容"""
     return str(_get(["fullscreen", "context_secondary_mode"], "both"))
 
 def get_fullscreen_prevent_sleep() -> bool:
-    """全屏模式屏幕常亮"""
     return bool(_get(["fullscreen", "prevent_sleep"], True))
 
 def get_show_translation() -> bool:
@@ -230,15 +225,12 @@ def get_show_romaji() -> bool:
     return bool(_get(["lyrics", "show_romaji"], False))
 
 def get_secondary_mode() -> str:
-    """副行显示偏好"""
     return str(_get(["lyrics", "secondary_mode"], "prefer_trans"))
 
 def get_show_line_progress() -> bool:
-    """无逐字歌词时是否在当前行下方显示单句进度条"""
     return bool(_get(["lyrics", "show_line_progress"], True))
 
 def get_parse_sections() -> bool:
-    """是否开启段落解析"""
     return bool(_get(["lyrics", "parse_sections"], True))
 
 def get_watched_apps() -> list[str]:
@@ -250,11 +242,9 @@ def get_watched_apps() -> list[str]:
     return ["cloudmusic.exe"]
 
 def get_mode() -> str:
-    """返回 'overlay' 或 'fullscreen'"""
     return str(_get(["window", "mode"], "overlay"))
 
 def get_overlay_geometry() -> tuple[int, int, int, int] | None:
-    """返回 (x, y, w, h) 或 None"""
     try:
         x = int(_get(["overlay", "x"], -1))
         y = int(_get(["overlay", "y"], -1))
@@ -270,13 +260,11 @@ def get_offset_ms() -> int:
     return int(_get(["lyrics", "offset_ms"], 0))
 
 def make_song_key(title: str, artist: str = "") -> str:
-    """生成标准化且易读的歌曲键名"""
     t = str(title or "").strip()
     a = str(artist or "").strip()
     return f"{t} - {a}" if a else t
 
 def get_song_offsets() -> dict[str, int]:
-    """读取所有单独配置的歌曲偏移字典"""
     try:
         from core import db_cache
         return db_cache.get_all_song_offsets()
@@ -284,7 +272,6 @@ def get_song_offsets() -> dict[str, int]:
         return {}
 
 def get_song_offset(title: str, artist: str = "") -> Optional[int]:
-    """获取指定歌曲的单独偏移量"""
     if not title:
         return None
     try:
@@ -294,14 +281,12 @@ def get_song_offset(title: str, artist: str = "") -> Optional[int]:
         return None
 
 def get_effective_song_offset(title: str, artist: str = "") -> int:
-    """获取指定歌曲的最终生效偏移量"""
     val = get_song_offset(title, artist)
     if val is not None:
         return val
     return get_offset_ms()
 
 def get_font_configs() -> list[dict]:
-    """读取保存的字体配置列表 [{'family': str, 'enabled': bool}]"""
     val = _get(["font", "configs"], [])
     if isinstance(val, list):
         return val
@@ -378,7 +363,6 @@ def set_offset_ms(v: int) -> None:
     _set(["lyrics", "offset_ms"], int(v))
 
 def set_song_offset(title: str, artist: str = "", offset_ms: int = 0) -> None:
-    """设置单首歌曲的独立偏移量并持久化到 SQLite 数据库"""
     if not title:
         return
     try:
@@ -388,7 +372,6 @@ def set_song_offset(title: str, artist: str = "", offset_ms: int = 0) -> None:
         print(f"[Settings] 设置歌曲独立偏移异常: {e}")
 
 def remove_song_offset(title: str, artist: str = "") -> None:
-    """移除单首歌曲的独立偏移量配置（从 SQLite 数据库）"""
     if not title:
         return
     try:
@@ -398,7 +381,6 @@ def remove_song_offset(title: str, artist: str = "") -> None:
         print(f"[Settings] 移除歌曲独立偏移异常: {e}")
 
 def set_all_song_offsets(offsets: dict[str, int]) -> None:
-    """全量更新 SQLite 数据库中的歌曲独立偏移字典"""
     try:
         from core import db_cache
         db_cache.set_all_song_offsets(offsets)
@@ -406,29 +388,23 @@ def set_all_song_offsets(offsets: dict[str, int]) -> None:
         print(f"[Settings] 全量更新歌曲独立偏移异常: {e}")
 
 def set_font_configs(configs: list[dict]) -> None:
-    """保存字体配置列表"""
     _set(["font", "configs"], configs)
 
 
 # ── 主题与配色方案接口 ────────────────────────────────────────────────────────
 def get_theme_preset() -> str:
-    """获取当前选择的配色预设名称 ('classic', 'md_blue', 'sakura', 'custom' 等)"""
     return str(_get(["theme", "preset"], "classic"))
 
 def set_theme_preset(v: str) -> None:
-    """保存当前选择的配色预设名称"""
     _set(["theme", "preset"], str(v))
 
 def get_theme_seed_color() -> str:
-    """获取 MD 种子颜色 (例如 '#0B57D0')"""
     return str(_get(["theme", "seed_color"], "#0B57D0"))
 
 def set_theme_seed_color(v: str) -> None:
-    """保存 MD 种子颜色"""
     _set(["theme", "seed_color"], str(v))
 
 def get_theme_colors() -> dict[str, str]:
-    """获取当前生效的歌词各角色颜色字典"""
     from core.color_theme import get_default_colors
     val = _get(["theme", "colors"], None)
     default_colors = get_default_colors()
@@ -439,10 +415,8 @@ def get_theme_colors() -> dict[str, str]:
     return default_colors
 
 def set_theme_colors(colors: dict[str, str]) -> None:
-    """全量更新歌词各角色颜色配置"""
     _set(["theme", "colors"], {str(k): str(v) for k, v in colors.items() if v})
 
 def get_theme_color(role: str, default: str = "#FFFFFF") -> str:
-    """获取指定角色的十六进制颜色字符串"""
     colors = get_theme_colors()
     return colors.get(role, default)

@@ -7,7 +7,7 @@ import math
 import time
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QRectF, QTimer, QPoint, QSize
+from PyQt6.QtCore import Qt, QRectF, QTimer, QPoint, QSize, QPointF
 from PyQt6.QtGui import (
     QColor, QPainter, QFont, QFontMetrics, QLinearGradient,
     QPainterPath, QMouseEvent, QWheelEvent, QKeyEvent, QPen, QBrush,
@@ -23,12 +23,22 @@ except ImportError:
     import font_manager
     from lyrics_parser import ParsedLyrics
 
+try:
+    from gui.lyric_scroll import (
+        LyricScrollTracker, compute_focus_offset,
+        compute_secondary_x, apply_edge_feather_mask, LayerBufferCache,
+    )
+except ImportError:
+    from lyric_scroll import (
+        LyricScrollTracker, compute_focus_offset,
+        compute_secondary_x, apply_edge_feather_mask, LayerBufferCache,
+    )
+
 GRIP_SIZE = 22      # 右下角半矩形缩放热区尺寸
 FADE_MARGIN = 48.0  # 左右两端虚化遮罩宽度
 
 
 class OverlayWidget(QWidget):
-    """桌面悬浮歌词窗口部件"""
 
     def __init__(self, controller, parent=None):
         super().__init__(parent)
@@ -66,8 +76,8 @@ class OverlayWidget(QWidget):
         self._prev_main_text: str = ""
         self._prev_trans_text: str = ""
 
-        self._scroll_x: float = 0.0
-        self._target_scroll_x: float = 0.0
+        self._scroll_tracker = LyricScrollTracker(damping=0.12, golden_ratio=0.42)
+        self._layer_cache = LayerBufferCache()
 
         # 字体与度量缓存
         self._font_size = settings.get_font_size_current()
@@ -96,6 +106,7 @@ class OverlayWidget(QWidget):
 
         # 渲染定时器
         self._render_timer = QTimer(self)
+        self._render_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._render_timer.setInterval(16)
         self._render_timer.timeout.connect(self._on_render_tick)
         self._render_timer.start()
@@ -120,7 +131,6 @@ class OverlayWidget(QWidget):
             self.setGeometry(x, y, win_w, win_h)
 
     def _rebuild_cover_cache(self, cover_size: int = 62) -> None:
-        """预生成双倍分辨率的高清展示图与环境光晕 Pixmap，彻底消除每帧 paintEvent 内反复 scaled()"""
         glow_size = cover_size + 12
         if self._thumb_pixmap and not self._thumb_pixmap.isNull():
             self._cached_thumb_scaled = self._thumb_pixmap.scaled(
@@ -152,7 +162,6 @@ class OverlayWidget(QWidget):
 
     # ── 公共接口 ─────────────────────────────────────────────────────────────
     def set_song(self, title: str, artist: str, thumb_bytes: bytes) -> None:
-        """设置当前歌曲信息与封面缩略图"""
         self._song_title = title.strip()
         self._song_artist = artist.strip()
         self._prev_thumb_pixmap = None
@@ -175,7 +184,6 @@ class OverlayWidget(QWidget):
         self.update()
 
     def update_hd_cover(self, hd_cover_bytes: bytes) -> None:
-        """无缝替换为高清封面图像"""
         if not hd_cover_bytes:
             return
         img = QImage.fromData(bytes(hd_cover_bytes))
@@ -200,23 +208,19 @@ class OverlayWidget(QWidget):
         self.update()
 
     def update_display_title(self, title: str) -> None:
-        """更新歌曲展示标题（如异步解析到副标题/别名）"""
         self._song_title = title.strip()
         self.update()
 
     def update_display_artist(self, artist: str) -> None:
-        """更新歌手行展示内容（如追加副标题/别名）"""
         self._song_artist = artist.strip()
         self.update()
 
     def update_song_info(self, title: str, artist: str) -> None:
-        """同步更新歌曲标题与歌手行展示内容"""
         self._song_title = title.strip()
         self._song_artist = artist.strip()
         self.update()
 
     def reset_loading_progress(self, keep_cover: bool = False) -> None:
-        """重置加载进度，开启圆环动画"""
         self._loading_progress = 0.0
         self._target_loading_progress = 0.10
         if not keep_cover:
@@ -226,8 +230,23 @@ class OverlayWidget(QWidget):
         self.update()
 
     def set_target_loading_progress(self, val: float) -> None:
-        """设置平滑推进的目标进度 (0.0 ~ 1.0)"""
         self._target_loading_progress = max(0.0, min(1.0, float(val)))
+
+    @property
+    def _scroll_x(self) -> float:
+        return self._scroll_tracker.scroll_x
+
+    @_scroll_x.setter
+    def _scroll_x(self, val: float) -> None:
+        self._scroll_tracker.scroll_x = val
+
+    @property
+    def _target_scroll_x(self) -> float:
+        return self._scroll_tracker.target_scroll_x
+
+    @_target_scroll_x.setter
+    def _target_scroll_x(self, val: float) -> None:
+        self._scroll_tracker.target_scroll_x = val
 
     def set_lyrics(self, lyrics: Optional[ParsedLyrics]) -> None:
         self._lyrics = lyrics
@@ -238,8 +257,8 @@ class OverlayWidget(QWidget):
         self._anim_progress = 1.0
         self._prev_main_text = ""
         self._prev_trans_text = ""
-        self._scroll_x = 0.0
-        self._target_scroll_x = 0.0
+        self._scroll_tracker.reset()
+        self._layer_cache.invalidate()
         self.update()
 
     def set_current_time(self, elapsed_ms: int, idx: int) -> None:
@@ -263,8 +282,7 @@ class OverlayWidget(QWidget):
             else:
                 self._anim_progress = 1.0
             # 换句时重置水平滚动
-            self._scroll_x = 0.0
-            self._target_scroll_x = 0.0
+            self._scroll_tracker.reset()
 
     def set_playing(self, playing: bool) -> None:
         if self._is_playing and not playing:
@@ -291,12 +309,8 @@ class OverlayWidget(QWidget):
             is_animating = True
 
         # 超长歌词水平滚动插值
-        diff = self._target_scroll_x - self._scroll_x
-        if abs(diff) > 0.05:
-            self._scroll_x += diff * 0.12
+        if self._scroll_tracker.tick():
             is_animating = True
-        else:
-            self._scroll_x = self._target_scroll_x
 
         # 封面加载圆环进度插值
         diff_p = self._target_loading_progress - self._loading_progress
@@ -530,13 +544,9 @@ class OverlayWidget(QWidget):
             self._paint_lyric_elements(painter, w, h, live_ms, fm_m, fm_s, current_line, curr_text, curr_sub_text)
             return
 
-        # ── 溢出滚动路径：创建离屏缓冲区应用两端渐变遮罩 ──
+        # ── 溢出滚动路径：复用离屏缓冲区应用两端渐变遮罩 ──
         dpr = self.devicePixelRatioF()
-        pw = int(math.ceil(w * dpr))
-        ph = int(math.ceil(h * dpr))
-        layer_img = QImage(pw, ph, QImage.Format.Format_ARGB32_Premultiplied)
-        layer_img.setDevicePixelRatio(dpr)
-        layer_img.fill(Qt.GlobalColor.transparent)
+        layer_img = self._layer_cache.get(w, h, dpr)
 
         lp = QPainter(layer_img)
         lp.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -545,18 +555,7 @@ class OverlayWidget(QWidget):
 
         self._paint_lyric_elements(lp, w, h, live_ms, fm_m, fm_s, current_line, curr_text, curr_sub_text)
 
-        # 左右两端应用 Alpha 渐变遮罩
-        lp.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-        mask_grad = QLinearGradient(0, 0, w, 0)
-        p_left = min(0.4, FADE_MARGIN / float(w))
-        p_right = max(0.6, (w - FADE_MARGIN) / float(w))
-
-        mask_grad.setColorAt(0.0, QColor(0, 0, 0, 0))
-        mask_grad.setColorAt(p_left, QColor(0, 0, 0, 255))
-        mask_grad.setColorAt(p_right, QColor(0, 0, 0, 255))
-        mask_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
-
-        lp.fillRect(0, 0, w, h, QBrush(mask_grad))
+        apply_edge_feather_mask(lp, w, h, FADE_MARGIN)
         lp.end()
 
         painter.drawImage(0, 0, layer_img)
@@ -636,72 +635,41 @@ class OverlayWidget(QWidget):
         base_y = (h - total_h) / 2.0 + center_y_offset
         main_baseline = base_y + fm_m.ascent()
 
-        main_w = fm_m.horizontalAdvance(text)
+        if self._is_verbatim_song and words:
+            word_widths = [fm_m.horizontalAdvance(wd.text) for wd in words]
+            main_w = float(sum(word_widths))
+        else:
+            word_widths = None
+            main_w = float(fm_m.horizontalAdvance(text))
         view_w = w - FADE_MARGIN * 2.0
 
         # ── 1. 水平滚动计算 ──
-        if main_w > view_w:
-            # 计算当前焦点在歌词文本内部的相对像素位置
-            focus_offset_in_text = 0.0
-            if words:
-                curr_w_x = 0.0
-                for wd in words:
-                    wd_w = fm_m.horizontalAdvance(wd.text)
-                    w_start = wd.time_ms
-                    w_dur = max(1, wd.duration_ms)
-                    w_end = w_start + w_dur
-                    if live_ms >= w_end:
-                        curr_w_x += wd_w
-                    elif live_ms >= w_start:
-                        curr_w_x += wd_w * min(1.0, max(0.0, (live_ms - w_start) / float(w_dur)))
-                        break
-                    else:
-                        break
-                focus_offset_in_text = curr_w_x
-            elif current_line_obj:
-                dur = max(1000, current_line_obj.duration_ms)
-                r = min(1.0, max(0.0, (live_ms - current_line_obj.time_ms) / float(dur)))
-                focus_offset_in_text = main_w * r
-
-            # 计算目标滚动位移：让焦点尽量保持在中央视野
-            max_scroll = main_w - view_w
-            target_shift = focus_offset_in_text - (view_w / 2.0)
-            self._target_scroll_x = max(0.0, min(max_scroll, target_shift))
-
-            # 应用当前平滑滚动偏移
-            start_x = FADE_MARGIN - self._scroll_x
+        if not force_full_progress:
+            focus_offset_in_text = compute_focus_offset(
+                words=words,
+                main_text=text,
+                line_time_ms=current_line_obj.time_ms if current_line_obj else 0,
+                line_dur_ms=current_line_obj.duration_ms if current_line_obj else 1000,
+                live_ms=live_ms,
+                fm=fm_m,
+                is_verbatim=bool(words),
+                word_widths=word_widths,
+            )
+            target_scroll, max_scroll = self._scroll_tracker.update_target(main_w, view_w, focus_offset_in_text)
         else:
-            # 未超出可视范围：居中对齐，无需滚动
-            self._target_scroll_x = 0.0
+            focus_offset_in_text = main_w
+            max_scroll = max(0.0, main_w - view_w)
+
+        if main_w > view_w:
+            start_x = FADE_MARGIN - self._scroll_tracker.scroll_x
+        else:
             start_x = (w - main_w) / 2.0
 
         # ── 2. 计算逐字进度的绝对染色坐标 ──
         if force_full_progress:
             progress_x = start_x + main_w
         elif self._is_verbatim_song:
-            if words:
-                curr_px = start_x
-                for wd in words:
-                    wd_w = fm_m.horizontalAdvance(wd.text)
-                    w_start = wd.time_ms
-                    w_dur = max(1, wd.duration_ms)
-                    w_end = w_start + w_dur
-
-                    if live_ms >= w_end:
-                        curr_px += wd_w
-                    elif live_ms >= w_start:
-                        r = (live_ms - w_start) / float(w_dur)
-                        curr_px += wd_w * min(1.0, max(0.0, r))
-                        break
-                    else:
-                        break
-                progress_x = curr_px
-            elif current_line_obj:
-                dur = max(1000, current_line_obj.duration_ms)
-                r = min(1.0, max(0.0, (live_ms - current_line_obj.time_ms) / float(dur)))
-                progress_x = start_x + main_w * r
-            else:
-                progress_x = start_x
+            progress_x = start_x + focus_offset_in_text
         else:
             progress_x = start_x
 
@@ -715,7 +683,7 @@ class OverlayWidget(QWidget):
             painter.setFont(self._font_main)
             base_col = QColor(col_inact.red(), col_inact.green(), col_inact.blue(), int(alpha * 205))
             painter.setPen(base_col)
-            painter.drawText(int(start_x), int(main_baseline), text)
+            painter.drawText(QPointF(start_x, main_baseline), text)
 
             if progress_x > start_x:
                 painter.save()
@@ -738,13 +706,13 @@ class OverlayWidget(QWidget):
                 sweep.setColorAt(1.0, c_act_zero)
 
                 painter.setPen(QPen(QBrush(sweep), 0))
-                painter.drawText(int(start_x), int(main_baseline), text)
+                painter.drawText(QPointF(start_x, main_baseline), text)
 
                 painter.restore()
         else:
             painter.setFont(self._font_main)
             painter.setPen(QColor(col_act.red(), col_act.green(), col_act.blue(), int(alpha * 235)))
-            painter.drawText(int(start_x), int(main_baseline), text)
+            painter.drawText(QPointF(start_x, main_baseline), text)
 
             # 单句播放时间进度
             if current_line_obj:
@@ -783,17 +751,20 @@ class OverlayWidget(QWidget):
         # ── 4. 译文渲染 ──
         if has_trans:
             painter.setFont(self._font_sub)
-            tr_w = fm_s.horizontalAdvance(trans)
-            # 译文起始 X 与主句保持自然对齐或居中
-            if main_w > view_w:
-                tr_x = start_x
-            else:
-                tr_x = (w - tr_w) / 2.0
+            tr_x = compute_secondary_x(
+                sub_text=trans,
+                fm_sub=fm_s,
+                w=w,
+                view_w=view_w,
+                side_margin=FADE_MARGIN,
+                max_scroll=max_scroll,
+                scroll_x=self._scroll_tracker.scroll_x,
+            )
             tr_baseline = base_y + fm_m.height() + 6 + fm_s.ascent()
 
             tr_alpha = int(alpha * 235)
             painter.setPen(QColor(col_sec.red(), col_sec.green(), col_sec.blue(), tr_alpha))
-            painter.drawText(int(tr_x), int(tr_baseline), trans)
+            painter.drawText(QPointF(tr_x, tr_baseline), trans)
 
     # ── 右下角半矩形缩放控件绘制 ─────────────────────────────────────────────
     def _draw_resize_grip(self, painter: QPainter, w: int, h: int) -> None:
@@ -955,12 +926,10 @@ class OverlayWidget(QWidget):
         return font_manager.make_app_font(size, bold=bold)
 
     def set_live_opacity(self, opacity: float) -> None:
-        """实时响应设置面板滑动条的不透明度变化并立即重绘"""
         self._opacity = max(0.15, min(1.0, float(opacity)))
         self.update()
 
     def _load_theme_colors(self) -> None:
-        """加载自定义/MD3配色方案"""
         self._color_active = QColor(settings.get_theme_color("lyric_active", "#FFFFFF"))
         self._color_inactive = QColor(settings.get_theme_color("lyric_inactive", "#A0A8B8"))
         self._color_secondary = QColor(settings.get_theme_color("lyric_secondary", "#C3E1FF"))
