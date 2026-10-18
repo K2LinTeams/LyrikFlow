@@ -63,9 +63,23 @@ class SMTCListener(QThread):
         with self._state_lock:
             return self._offset_ms
 
-    def adjust_offset(self, delta_ms: int) -> None:
+    def adjust_offset(self, delta_ms: int) -> int:
         with self._state_lock:
-            self._offset_ms += delta_ms
+            step = abs(delta_ms) if delta_ms != 0 else 100
+            if delta_ms > 0:
+                self._offset_ms = (self._offset_ms // step + 1) * step
+            else:
+                import math
+                self._offset_ms = int(math.ceil(self._offset_ms / float(step) - 1.0) * step)
+            new_off = self._offset_ms
+            title = self._last_title
+            artist = self._last_artist
+        if title:
+            try:
+                settings.set_song_offset(title, artist, new_off)
+            except Exception:
+                pass
+        return new_off
 
     def reset_offset(self) -> None:
         with self._state_lock:

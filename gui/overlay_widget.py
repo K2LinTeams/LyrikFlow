@@ -909,12 +909,13 @@ class OverlayWidget(QWidget):
         settings.set_show_line_progress(self._show_line_progress)
         self.update()
 
+
     def keyPressEvent(self, e: QKeyEvent):
         k = e.key()
         if k == Qt.Key.Key_Left:
-            self._ctrl.smtc.adjust_offset(-100)
+            self._ctrl.adjust_song_offset(-100)
         elif k == Qt.Key.Key_Right:
-            self._ctrl.smtc.adjust_offset(100)
+            self._ctrl.adjust_song_offset(100)
         elif k == Qt.Key.Key_Space:
             self._ctrl.smtc.toggle_play_pause()
         elif k == Qt.Key.Key_F:

@@ -1194,9 +1194,9 @@ class FullscreenWidget(QWidget):
         elif key == Qt.Key.Key_S:
             self._ctrl.open_settings()
         elif key == Qt.Key.Key_Left:
-            self._ctrl.smtc.adjust_offset(-100)
+            self._ctrl.adjust_song_offset(-100)
         elif key == Qt.Key.Key_Right:
-            self._ctrl.smtc.adjust_offset(100)
+            self._ctrl.adjust_song_offset(100)
         elif key == Qt.Key.Key_Space:
             self._ctrl.smtc.toggle_play_pause()
         elif key == Qt.Key.Key_F11:

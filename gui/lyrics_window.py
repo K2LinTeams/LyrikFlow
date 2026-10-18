@@ -305,6 +305,34 @@ class LyricsWindow(QObject):
         self._overlay.set_current_time(current_ms, idx)
         self._fullscreen.set_current_time(current_ms, idx)
 
+    def adjust_song_offset(self, delta_ms: int) -> int:
+        cur_offset = self.smtc.get_offset()
+        step = abs(delta_ms) if delta_ms != 0 else 100
+        if delta_ms > 0:
+            new_offset = (cur_offset // step + 1) * step
+        else:
+            import math
+            new_offset = int(math.ceil(cur_offset / float(step) - 1.0) * step)
+
+        self.smtc.set_offset(new_offset)
+
+        if self._current_title:
+            settings.set_song_offset(self._current_title, self._current_artist, new_offset)
+        else:
+            settings.set_offset_ms(new_offset)
+
+        current_ms = self.smtc._get_elapsed_ms()
+        if self._lyrics:
+            idx = self._lyrics.get_line_index(current_ms)
+            self._cur_index = idx
+            self._overlay.set_current_time(current_ms, idx)
+            self._fullscreen.set_current_time(current_ms, idx)
+        else:
+            self._overlay.set_current_time(current_ms, -1)
+            self._fullscreen.set_current_time(current_ms, -1)
+
+        return new_offset
+
     def open_settings(self) -> None:
         initial_opacity = settings.get_opacity()
         cover_bytes = self._thumb_bytes
