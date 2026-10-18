@@ -912,9 +912,11 @@ class OverlayWidget(QWidget):
     def keyPressEvent(self, e: QKeyEvent):
         k = e.key()
         if k == Qt.Key.Key_Left:
-            self._ctrl.smtc.adjust_offset(-5000)
+            self._ctrl.smtc.adjust_offset(-100)
         elif k == Qt.Key.Key_Right:
-            self._ctrl.smtc.adjust_offset(5000)
+            self._ctrl.smtc.adjust_offset(100)
+        elif k == Qt.Key.Key_Space:
+            self._ctrl.smtc.toggle_play_pause()
         elif k == Qt.Key.Key_F:
             self._ctrl.switch_mode("fullscreen")
         else:

@@ -155,6 +155,7 @@ class LyricsWindow(QObject):
         self._fullscreen.set_playing(is_playing)
         self._update_sleep_inhibit()
         init_ms = self.smtc._get_elapsed_ms()
+        self._fullscreen.set_duration(self.smtc.get_duration_ms())
         self._overlay.set_current_time(init_ms, -1)
         self._fullscreen.set_current_time(init_ms, -1)
 
@@ -212,7 +213,11 @@ class LyricsWindow(QObject):
         self._update_sleep_inhibit()
 
     def _on_tick(self, elapsed_ms: int) -> None:
+        duration_ms = self.smtc.get_duration_ms()
+        self._fullscreen.set_duration(duration_ms)
         if not self._lyrics:
+            self._overlay.set_current_time(elapsed_ms, -1)
+            self._fullscreen.set_current_time(elapsed_ms, -1)
             return
         idx = self._lyrics.get_line_index(elapsed_ms)
         self._cur_index = idx
@@ -280,6 +285,7 @@ class LyricsWindow(QObject):
     def _push_lyrics_to_ui(self) -> None:
         self._overlay.set_lyrics(self._lyrics)
         self._fullscreen.set_lyrics(self._lyrics)
+        self._fullscreen.set_duration(self.smtc.get_duration_ms())
         self._overlay.set_playing(self.smtc._is_playing)
         self._fullscreen.set_playing(self.smtc._is_playing)
         current_ms = self.smtc._get_elapsed_ms()

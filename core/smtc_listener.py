@@ -71,6 +71,20 @@ class SMTCListener(QThread):
         with self._state_lock:
             self._offset_ms = settings.get_effective_song_offset(self._last_title, self._last_artist)
 
+    def get_duration_ms(self) -> int:
+        with self._state_lock:
+            return self._native_duration_ms
+
+    def toggle_play_pause(self) -> None:
+        async def _do():
+            try:
+                if self._current_session:
+                    await self._current_session.try_toggle_play_pause_async()
+            except Exception:
+                pass
+        if self._loop and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(lambda: asyncio.create_task(_do()))
+
     def stop(self) -> None:
         self._stop_flag = True
 

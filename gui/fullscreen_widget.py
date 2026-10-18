@@ -447,16 +447,14 @@ class LyricsCanvas(QWidget):
                     p.drawText(QPointF(ttx, sub_y + tfm.ascent()), sec_text)
 
     def paintEvent(self, event):
-        if not self._lyrics:
+        if not self._lyrics or self._lyrics.is_instrumental:
             return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
         w, h = self.width(), self.height()
 
-        if self._lyrics.is_instrumental:
-            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
         cur = self._cur_index
         live_ms = self._get_live_elapsed_ms()
@@ -641,6 +639,7 @@ class FullscreenWidget(QWidget):
         self._is_playing: bool = False
         self._elapsed_ms: int = 0
         self._total_ms: int = 0
+        self._load_theme_colors()
 
         # 环境光晕三点采样色彩
         self._ambient_col_center = QColor(165, 145, 160)
@@ -854,6 +853,23 @@ class FullscreenWidget(QWidget):
         self._elapsed_ms = elapsed_ms
         self._canvas.set_current_time(elapsed_ms, idx)
 
+    def _load_theme_colors(self):
+        self._color_accent = QColor(settings.get_theme_color("accent", "#78CDFF"))
+        self._color_prog_start = QColor(settings.get_theme_color("progress_start", "#FFFFFF"))
+        self._color_prog_end = QColor(settings.get_theme_color("progress_end", "#A0E6FF"))
+        self._color_inact = QColor(settings.get_theme_color("lyric_inactive", "#A0A8B8"))
+
+    def set_duration(self, duration_ms: int) -> None:
+        duration_ms = max(0, int(duration_ms))
+        if duration_ms != self._total_ms:
+            self._total_ms = duration_ms
+            self.update()
+
+    def _is_pure_music(self) -> bool:
+        if self._lyrics and self._lyrics.is_instrumental:
+            return True
+        return False
+
     def set_current_index(self, idx: int):
         self._cur_index = idx
         self._canvas.set_current_index(idx)
@@ -987,7 +1003,7 @@ class FullscreenWidget(QWidget):
             painter.drawEllipse(ring_rect)
 
             # 2. 动态进度光弧
-            arc_pen = QPen(QColor(120, 205, 255, 230))  # 强调高亮色
+            arc_pen = QPen(self._color_accent)
             arc_pen.setWidthF(3.0)
             arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(arc_pen)
@@ -1060,16 +1076,105 @@ class FullscreenWidget(QWidget):
 
         painter.setFont(_make_font(13, bold=False))
         if self._lyrics and self._lyrics.is_instrumental:
-            painter.setPen(QColor(120, 205, 255, 220))  # 纯音乐状态使用强调色
+            painter.setPen(QColor(120, 205, 255, 220))
         else:
             painter.setPen(QColor(255, 255, 255, 130))
         painter.drawText(tx, margin + 48, self._artist or "")
 
-        # ── 4. 底部极简提示 ────────────────────────────────────────────────
+        if self._lyrics and self._lyrics.is_instrumental:
+            avail_size = min(float(w) * 0.42, float(h) * 0.46)
+            center_size = float(min(360, max(180, int(avail_size))))
+            cx = (float(w) - center_size) / 2.0
+            cy = (float(h) - center_size) / 2.0
+            center_rect = QRectF(cx, cy, center_size, center_size)
+
+            if not self._thumb_pixmap or self._cover_alpha <= 0.01:
+                placeholder_path = QPainterPath()
+                placeholder_path.addRoundedRect(center_rect, 16.0, 16.0)
+                painter.fillPath(placeholder_path, QColor(255, 255, 255, 20))
+
+            if self._thumb_pixmap and self._cover_alpha > 0.01:
+                base_center_alpha = 0.30 * self._cover_alpha
+
+                glow_rect = center_rect.adjusted(-8, -8, 8, 8)
+                glow_pix = self._thumb_pixmap.scaled(
+                    16, 16,
+                    Qt.AspectRatioMode.IgnoreAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                ).scaled(
+                    int(glow_rect.width()), int(glow_rect.height()),
+                    Qt.AspectRatioMode.IgnoreAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                glow_path = QPainterPath()
+                glow_path.addRoundedRect(glow_rect, 22.0, 22.0)
+                painter.save()
+                painter.setClipPath(glow_path)
+                painter.setOpacity(0.12 * self._cover_alpha)
+                painter.drawPixmap(int(glow_rect.x()), int(glow_rect.y()), glow_pix)
+                painter.restore()
+
+                path = QPainterPath()
+                path.addRoundedRect(center_rect, 16.0, 16.0)
+                painter.save()
+                painter.setClipPath(path)
+                target_rect = center_rect.toRect()
+
+                if self._prev_thumb_pixmap and not self._prev_thumb_pixmap.isNull() and self._thumb_crossfade < 1.0:
+                    painter.setOpacity(base_center_alpha)
+                    scaled_prev = self._prev_thumb_pixmap.scaled(
+                        target_rect.size() * 2,
+                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    painter.drawPixmap(target_rect, scaled_prev)
+
+                    painter.setOpacity(base_center_alpha * self._thumb_crossfade)
+                    scaled_curr = self._thumb_pixmap.scaled(
+                        target_rect.size() * 2,
+                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    painter.drawPixmap(target_rect, scaled_curr)
+                else:
+                    painter.setOpacity(base_center_alpha)
+                    scaled_thumb = self._thumb_pixmap.scaled(
+                        target_rect.size() * 2,
+                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    painter.drawPixmap(target_rect, scaled_thumb)
+
+                painter.restore()
+
+            if self._loading_progress > 0.02 and (self._loading_progress < 0.999 or self._cover_alpha < 0.98):
+                center_pt = center_rect.center()
+                radius = 20.0
+                ring_rect = QRectF(center_pt.x() - radius, center_pt.y() - radius, radius * 2.0, radius * 2.0)
+
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                track_pen = QPen(QColor(255, 255, 255, 35))
+                track_pen.setWidthF(3.0)
+                track_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                painter.setPen(track_pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(ring_rect)
+
+                arc_pen = QPen(self._color_accent)
+                arc_pen.setWidthF(3.0)
+                arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                painter.setPen(arc_pen)
+
+                start_angle = int((90.0 - self._loading_spinner_angle * 0.15) * 16.0)
+                span_angle = -int(max(8.0, min(360.0, self._loading_progress * 360.0)) * 16.0)
+                painter.drawArc(ring_rect, start_angle, span_angle)
+                painter.restore()
+
         hints_font = _make_font(11, bold=False)
         painter.setFont(hints_font)
         painter.setPen(QColor(255, 255, 255, 75))
-        hints = "← -5s  |  → +5s  |  S 设置  |  O 桌面悬浮条  |  Esc 退出全屏"
+        hints = "← -0.1s  |  → +0.1s  |  Space 播放/暂停  |  S 设置  |  O 桌面悬浮条  |  Esc 退出全屏"
         fm = QFontMetrics(hints_font)
         painter.drawText((w - fm.horizontalAdvance(hints)) // 2, h - 22, hints)
 
@@ -1089,9 +1194,11 @@ class FullscreenWidget(QWidget):
         elif key == Qt.Key.Key_S:
             self._ctrl.open_settings()
         elif key == Qt.Key.Key_Left:
-            self._ctrl.smtc.adjust_offset(-5000)
+            self._ctrl.smtc.adjust_offset(-100)
         elif key == Qt.Key.Key_Right:
-            self._ctrl.smtc.adjust_offset(5000)
+            self._ctrl.smtc.adjust_offset(100)
+        elif key == Qt.Key.Key_Space:
+            self._ctrl.smtc.toggle_play_pause()
         elif key == Qt.Key.Key_F11:
             self._ctrl.switch_mode("overlay")
         else:
@@ -1145,5 +1252,6 @@ class FullscreenWidget(QWidget):
             self._ctrl._reload_current_song_lyrics()
 
     def reload_settings(self):
+        self._load_theme_colors()
         self._canvas.reload_settings()
         self.update()
